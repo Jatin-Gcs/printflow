@@ -35,7 +35,7 @@ interface SessionState {
   total_sheets: number;
 }
 
-const LOCAL_BRIDGE_URL = ' https://lanka-button-repair-sold.trycloudflare.com ';
+const LOCAL_BRIDGE_URL = 'https://writing-cooperative-naval-jersey.trycloudflare.com';
 
 export const OperatorDashboard: React.FC = () => {
   // Support dynamic environment base URL for Vercel/Cloud alongside local fallback

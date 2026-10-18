@@ -11,7 +11,8 @@ import {
   Search,
   Sparkles,
   CheckCircle2,
-  CheckCheck
+  CheckCheck,
+  Cpu
 } from 'lucide-react';
 
 interface DocumentMetadata {
@@ -34,6 +35,8 @@ interface SessionState {
   total_sheets: number;
 }
 
+const LOCAL_BRIDGE_URL = 'http://localhost:9123';
+
 export const OperatorDashboard: React.FC = () => {
   // Support dynamic environment base URL for Vercel/Cloud alongside local fallback
   const API_BASE = useMemo(() => {
@@ -53,24 +56,45 @@ export const OperatorDashboard: React.FC = () => {
   const [selectedPrinter, setSelectedPrinter] = useState('');
   const [autoPrint, setAutoPrint] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
+  const [isBridgeOnline, setIsBridgeOnline] = useState(false);
   const [isSpooling, setIsSpooling] = useState(false);
 
   const searchInputRef = useRef<HTMLInputElement>(null);
   const socketRef = useRef<WebSocket | null>(null);
 
+  // Check Local Bridge first; fallback to Cloud Backend
   useEffect(() => {
-    fetch(`${API_BASE}/api/v1/printers`)
-      .then((res) => res.json())
-      .then((data) => {
-        if (data.printers && data.printers.length > 0) {
-          setAvailablePrinters(data.printers);
-          setSelectedPrinter(data.default || data.printers[0]);
+    const detectPrinters = async () => {
+      try {
+        const bridgeRes = await fetch(`${LOCAL_BRIDGE_URL}/printers`, { signal: AbortSignal.timeout(1500) });
+        if (bridgeRes.ok) {
+          const bridgeData = await bridgeRes.json();
+          if (bridgeData.printers && bridgeData.printers.length > 0) {
+            setAvailablePrinters(bridgeData.printers);
+            setSelectedPrinter(bridgeData.default || bridgeData.printers[0]);
+            setIsBridgeOnline(true);
+            return;
+          }
         }
-      })
-      .catch(() => {
+      } catch {
+        setIsBridgeOnline(false);
+      }
+
+      // Fallback: Fetch from cloud API
+      try {
+        const cloudRes = await fetch(`${API_BASE}/api/v1/printers`);
+        const cloudData = await cloudRes.json();
+        if (cloudData.printers && cloudData.printers.length > 0) {
+          setAvailablePrinters(cloudData.printers);
+          setSelectedPrinter(cloudData.default || cloudData.printers[0]);
+        }
+      } catch {
         setAvailablePrinters(['Default System Printer']);
         setSelectedPrinter('Default System Printer');
-      });
+      }
+    };
+
+    detectPrinters();
 
     fetch(`${API_BASE}/api/v1/settings/auto-print`)
       .then((res) => res.json())
@@ -231,22 +255,32 @@ export const OperatorDashboard: React.FC = () => {
     if (!activeSession) return;
     setIsSpooling(true);
     try {
-      await fetch(
-        `${API_BASE}/api/v1/sessions/${activeSession.session_id}/dispatch`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            action: 'PRINT_DIRECT',
-            target_printer: selectedPrinter,
-            tray_bin: 'Auto',
-            document_overrides: activeSession.documents.map((d) => ({
-              document_id: d.id,
-              print_mode: d.print_mode
-            }))
-          })
-        }
-      );
+      if (isBridgeOnline) {
+        // Direct Hardware Spool via Local Bridge
+        const pdfDownloadUrl = `${API_BASE}/api/v1/sessions/${activeSession.session_id}/download`;
+        const res = await fetch(`${LOCAL_BRIDGE_URL}/spool?pdf_url=${encodeURIComponent(pdfDownloadUrl)}&printer_name=${encodeURIComponent(selectedPrinter)}`, {
+          method: 'POST'
+        });
+        if (!res.ok) throw new Error('Local bridge failed to dispatch job to Windows driver.');
+      } else {
+        // Fallback to Cloud API Dispatch
+        await fetch(
+          `${API_BASE}/api/v1/sessions/${activeSession.session_id}/dispatch`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              action: 'PRINT_DIRECT',
+              target_printer: selectedPrinter,
+              tray_bin: 'Auto',
+              document_overrides: activeSession.documents.map((d) => ({
+                document_id: d.id,
+                print_mode: d.print_mode
+              }))
+            })
+          }
+        );
+      }
     } catch (err) {
       alert(`Print error: ${err}`);
     } finally {
@@ -288,10 +322,19 @@ export const OperatorDashboard: React.FC = () => {
               <span className="font-bold tracking-tight text-base flex items-center gap-1.5">
                 PrintFlow <span className="text-[10px] uppercase font-mono px-1.5 py-0.5 bg-indigo-500/20 text-indigo-400 border border-indigo-500/30 rounded">POS Hub</span>
               </span>
-              <span className="text-xs text-slate-400 flex items-center gap-1.5">
-                <span className={`w-2 h-2 rounded-full ${isConnected ? 'bg-emerald-400 animate-pulse' : 'bg-rose-500'}`} />
-                {isConnected ? 'WhatsApp Sync Active' : 'Disconnected'}
-              </span>
+              <div className="flex items-center gap-3 text-xs text-slate-400 mt-0.5">
+                <span className="flex items-center gap-1.5">
+                  <span className={`w-2 h-2 rounded-full ${isConnected ? 'bg-emerald-400 animate-pulse' : 'bg-rose-500'}`} />
+                  {isConnected ? 'WhatsApp Sync Active' : 'Disconnected'}
+                </span>
+                <span className="text-slate-600">•</span>
+                <span className="flex items-center gap-1">
+                  <Cpu className="w-3 h-3 text-slate-500" />
+                  <span className={isBridgeOnline ? 'text-emerald-400 font-mono text-[11px]' : 'text-slate-500 font-mono text-[11px]'}>
+                    {isBridgeOnline ? 'Local Bridge Active' : 'Bridge Offline'}
+                  </span>
+                </span>
+              </div>
             </div>
           </div>
         </div>
@@ -319,7 +362,7 @@ export const OperatorDashboard: React.FC = () => {
             <select
               value={selectedPrinter}
               onChange={(e) => setSelectedPrinter(e.target.value)}
-              className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+              className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500 font-mono"
             >
               {availablePrinters.map((p) => (
                 <option key={p} value={p}>
@@ -594,7 +637,7 @@ export const OperatorDashboard: React.FC = () => {
                     {isSpooling ? (
                       <>
                         <RefreshCw className="w-4 h-4 animate-spin" />
-                        <span>Sending to Printer...</span>
+                        <span>Spooling via Hardware Bridge...</span>
                       </>
                     ) : (
                       <>

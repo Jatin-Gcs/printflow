@@ -35,7 +35,7 @@ interface SessionState {
   total_sheets: number;
 }
 
-const LOCAL_BRIDGE_URL = 'http://localhost:9123';
+const LOCAL_BRIDGE_URL = ' https://lanka-button-repair-sold.trycloudflare.com ';
 
 export const OperatorDashboard: React.FC = () => {
   // Support dynamic environment base URL for Vercel/Cloud alongside local fallback

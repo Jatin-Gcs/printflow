@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Node
+node_modules/
+printflow-gateway/auth_info_baileys/
+
+# Ephemeral Storage
+storage/ingress/*
+storage/normalized/*
+storage/spool/*
+storage/quarantine/*
+!storage/ingress/.gitkeep
+!storage/normalized/.gitkeep
+!storage/spool/.gitkeep
+!storage/quarantine/.gitkeep
+
+# Build outputs & env
+dist/
+.env
+.env.local
+logs/

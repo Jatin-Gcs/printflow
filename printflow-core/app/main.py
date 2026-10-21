@@ -81,6 +81,22 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+async def schedule_delayed_purge(session_id: str, delay_seconds: int = 900):
+    """Waits for delay_seconds (default 15m) and permanently shreds files if order was handed over."""
+    await asyncio.sleep(delay_seconds)
+    session = active_sessions.get(session_id)
+    if session and session.status == SessionStatus.COMPLETED:
+        cleaner_service.execute_purge_sweep()
+        active_sessions.pop(session_id, None)
+        if session.customer_phone in phone_to_session_map:
+            if phone_to_session_map[session.customer_phone] == session_id:
+                del phone_to_session_map[session.customer_phone]
+        try:
+            await ws_manager.broadcast_event("SESSION_PURGED", {"session_id": session_id})
+            print(f"[CLEANER] Auto-purged completed session {session_id} after 15m retention.")
+        except Exception:
+            pass
+
 def process_normalization_background(session_id: str, payload: InboundDocumentPayload, doc_id: str):
     src_file = Path(payload.file_path)
     session_norm_dir = settings.NORMALIZED_DIR / session_id
@@ -288,7 +304,7 @@ async def download_master_pdf(session_id: str):
 
 @app.post(f"{settings.API_V1_STR}/sessions/{{session_id}}/complete")
 async def complete_session(session_id: str):
-    """Marks an order as completed/handed-over, updating active dashboard queues."""
+    """Marks an order as completed/handed-over, updating active dashboard queues and scheduling 15m purge."""
     session = active_sessions.get(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Customer session not found.")
@@ -299,7 +315,27 @@ async def complete_session(session_id: str):
         await ws_manager.broadcast_event("SESSION_UPDATED", session.model_dump())
     except Exception:
         pass
-    return {"status": "SUCCESS", "session_id": session_id}
+
+    # Schedule 15-minute automatic disk purge (900 seconds)
+    asyncio.create_task(schedule_delayed_purge(session_id, delay_seconds=900))
+    return {"status": "SUCCESS", "session_id": session_id, "purge_in_seconds": 900}
+
+@app.post(f"{settings.API_V1_STR}/sessions/clear-completed")
+async def clear_all_completed_sessions():
+    """Immediately flushes all completed sessions from memory and triggers a storage disk wipe."""
+    completed_ids = [sid for sid, s in active_sessions.items() if s.status == SessionStatus.COMPLETED]
+    for sid in completed_ids:
+        session = active_sessions.pop(sid, None)
+        if session and session.customer_phone in phone_to_session_map:
+            if phone_to_session_map[session.customer_phone] == sid:
+                del phone_to_session_map[session.customer_phone]
+        try:
+            await ws_manager.broadcast_event("SESSION_PURGED", {"session_id": sid})
+        except Exception:
+            pass
+
+    cleaner_service.execute_purge_sweep()
+    return {"status": "SUCCESS", "purged_count": len(completed_ids)}
 
 @app.post(f"{settings.API_V1_STR}/sessions/{{session_id}}/dispatch")
 async def dispatch_session(session_id: str, req: DispatchRequest, bg: BackgroundTasks):

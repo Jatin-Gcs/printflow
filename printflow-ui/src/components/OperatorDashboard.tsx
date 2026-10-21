@@ -12,7 +12,8 @@ import {
   Sparkles,
   CheckCircle2,
   CheckCheck,
-  Cpu
+  Cpu,
+  Trash2
 } from 'lucide-react';
 
 interface DocumentMetadata {
@@ -190,6 +191,16 @@ export const OperatorDashboard: React.FC = () => {
       }
     } catch (err) {
       console.error('Failed to complete session:', err);
+    }
+  };
+
+  const handleClearAllCompleted = async () => {
+    try {
+      await fetch(`${API_BASE}/api/v1/sessions/clear-completed`, {
+        method: 'POST'
+      });
+    } catch (err) {
+      console.error('Failed to clear completed sessions:', err);
     }
   };
 
@@ -433,6 +444,23 @@ export const OperatorDashboard: React.FC = () => {
             </button>
           </div>
 
+          {/* Sprint 2: 15m Grace Notice & Clear All Action */}
+          {activeTab === 'COMPLETED' && completedSessionsList.length > 0 && (
+            <div className="px-3 py-2 border-b border-slate-800/60 flex items-center justify-between bg-slate-900/60">
+              <span className="text-[11px] font-mono text-slate-400 flex items-center gap-1">
+                <Clock className="w-3 h-3 text-slate-500" />
+                Retained 15m
+              </span>
+              <button
+                onClick={handleClearAllCompleted}
+                className="text-[11px] text-rose-400 hover:text-rose-300 font-semibold transition flex items-center gap-1 bg-rose-950/40 border border-rose-900/60 px-2 py-0.5 rounded"
+              >
+                <Trash2 className="w-3 h-3" />
+                Clear All
+              </button>
+            </div>
+          )}
+
           <div className="flex-1 overflow-y-auto p-2 space-y-1.5">
             {displayedList.length === 0 ? (
               <div className="p-8 text-center text-slate-500 space-y-2">
@@ -441,7 +469,7 @@ export const OperatorDashboard: React.FC = () => {
                   {activeTab === 'ACTIVE' ? 'Active queue is empty.' : 'No completed orders yet.'}
                 </p>
                 <p className="text-[11px]">
-                  {activeTab === 'ACTIVE' ? 'Incoming WhatsApp batches will appear here.' : 'Completed jobs remain here for 60m.'}
+                  {activeTab === 'ACTIVE' ? 'Incoming WhatsApp batches will appear here.' : 'Completed jobs auto-shred after 15m.'}
                 </p>
               </div>
             ) : (

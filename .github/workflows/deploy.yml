@@ -1,0 +1,46 @@
+name: Deploy PrintFlow to AWS EC2
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - 'printflow-ui/**' # Vercel handles UI deployments automatically
+
+jobs:
+  deploy:
+    name: Deploy to EC2
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Deploy via SSH to EC2
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script_stop: true
+          script: |
+            echo ">>> Navigating to project directory..."
+            cd /home/ubuntu/printflow
+
+            echo ">>> Pulling latest changes from main..."
+            git pull origin main
+
+            echo ">>> Updating Python dependencies if requirements changed..."
+            cd /home/ubuntu/printflow/printflow-core
+            source .venv/bin/activate
+            pip install -r requirements.txt --quiet || true
+
+            echo ">>> Updating Node dependencies if package.json changed..."
+            cd /home/ubuntu/printflow/printflow-gateway
+            npm install --quiet
+
+            echo ">>> Restarting PM2 background services..."
+            pm2 restart all
+
+            echo ">>> Deployment completed successfully!"
+            pm2 status

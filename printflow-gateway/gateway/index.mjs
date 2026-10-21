@@ -161,15 +161,26 @@ async function startWhatsAppGateway() {
         continue;
       }
 
+      // 3. FILTER: Ignore historical backfills older than 5 minutes (300 seconds)
+      const msgTimestamp = Number(msg.messageTimestamp || 0);
+      const nowTimestamp = Math.floor(Date.now() / 1000);
+      if (msgTimestamp > 0 && nowTimestamp - msgTimestamp > 300) {
+        continue;
+      }
+
       const { type: mediaType, media, rootMsg } = unwrapMediaMessage(msg.message);
       if (!mediaType || !media) continue;
 
-      // 3. FILTER: Check MIME type against allowed list
+      // 4. GUARD: Prevent 'Cannot derive from empty media key' crash
+      if (!media.mediaKey || (Buffer.isBuffer(media.mediaKey) && media.mediaKey.length === 0)) {
+        continue;
+      }
+
+      // 5. FILTER: Check MIME type against allowed list
       const rawMime = (media.mimetype || '').split(';')[0].toLowerCase();
       const detectedMime = rawMime || (mediaType === 'imageMessage' ? 'image/jpeg' : 'application/pdf');
 
       if (!ALLOWED_MIME_TYPES.has(detectedMime)) {
-        console.log(`[GATEWAY] Skipping unsupported media type: ${detectedMime}`);
         continue;
       }
 
@@ -218,7 +229,7 @@ async function startWhatsAppGateway() {
         }, { timeout: 10000 });
 
       } catch (err) {
-        console.error(`[GATEWAY] Error processing msg ${msg.key.id}:`, err.message);
+        console.error(`[GATEWAY] Skipped unreadable media in msg ${msg.key.id}:`, err.message);
       }
     }
   });

@@ -15,6 +15,16 @@ const FASTAPI_ENDPOINT = process.env.API_ENDPOINT || 'http://127.0.0.1:8000/api/
 const FASTAPI_QR_ENDPOINT = process.env.QR_ENDPOINT || 'http://127.0.0.1:8000/api/v1/gateway/qr-state';
 const AUTH_FOLDER = path.resolve('auth_info_baileys');
 
+// Allowed document & image types for counter printing
+const ALLOWED_MIME_TYPES = new Set([
+  'application/pdf',
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document', // .docx
+  'application/msword' // .doc
+]);
+
 function extractPhoneNumber(msg) {
   const key = msg.key || {};
   const candidates = [key.participant, key.remoteJidAlt, key.remoteJid];
@@ -137,10 +147,31 @@ async function startWhatsAppGateway() {
     if (!['notify', 'append'].includes(type)) return;
 
     for (const msg of messages) {
-      if (!msg.message || msg.key.fromMe) continue;
+      if (!msg.message || msg.key?.fromMe) continue;
+
+      const senderJid = msg.key?.remoteJid || '';
+
+      // 1. FILTER: Ignore WhatsApp Status / Stories updates completely
+      if (senderJid === 'status@broadcast' || senderJid.includes('broadcast')) {
+        continue;
+      }
+
+      // 2. FILTER: Ignore group chats (only process direct 1-to-1 customer messages)
+      if (senderJid.endsWith('@g.us')) {
+        continue;
+      }
 
       const { type: mediaType, media, rootMsg } = unwrapMediaMessage(msg.message);
       if (!mediaType || !media) continue;
+
+      // 3. FILTER: Check MIME type against allowed list
+      const rawMime = (media.mimetype || '').split(';')[0].toLowerCase();
+      const detectedMime = rawMime || (mediaType === 'imageMessage' ? 'image/jpeg' : 'application/pdf');
+
+      if (!ALLOWED_MIME_TYPES.has(detectedMime)) {
+        console.log(`[GATEWAY] Skipping unsupported media type: ${detectedMime}`);
+        continue;
+      }
 
       const customerPhone = extractPhoneNumber(msg);
 
@@ -174,12 +205,14 @@ async function startWhatsAppGateway() {
         const destinationPath = path.join(customerDir, `${Date.now()}_${originalFilename}`);
         fs.writeFileSync(destinationPath, buffer);
 
+        console.log(`[GATEWAY] Ingested print file: "${originalFilename}" from ${customerPhone}`);
+
         await axios.post(FASTAPI_ENDPOINT, {
           customer_phone: customerPhone,
           message_id: msg.key.id,
           file_path: destinationPath,
           original_filename: originalFilename,
-          mime_type: media.mimetype || (mediaType === 'imageMessage' ? 'image/jpeg' : 'application/pdf'),
+          mime_type: detectedMime,
           file_size: buffer.length,
           timestamp: Date.now() / 1000
         }, { timeout: 10000 });

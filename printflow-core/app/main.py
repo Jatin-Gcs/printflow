@@ -11,6 +11,7 @@ from typing import Dict, List, Any
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, BackgroundTasks, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, FileResponse
+from pydantic import BaseModel
 import pymupdf
 
 from app.config import settings
@@ -38,12 +39,19 @@ thread_pool = ThreadPoolExecutor(max_workers=4)
 auto_print_enabled: bool = False
 auto_print_target_printer: str = ""
 
-# --- Gateway Pairing State (Declared before endpoints) ---
+# --- Gateway Pairing State ---
 gateway_state: Dict[str, Any] = {
-    "status": "DISCONNECTED",  # "SCAN_REQUIRED", "CONNECTED", "DISCONNECTED", "LOGGED_OUT"
+    "status": "DISCONNECTED",
     "qr_image": None,
     "updated_at": time.time()
 }
+
+# --- Configurable Pricing Rate Card ---
+class PricingConfig(BaseModel):
+    rate_simplex: float = 2.0  # Default ₹2.00 per single-sided sheet
+    rate_duplex: float = 3.0   # Default ₹3.00 per double-sided sheet
+
+pricing_settings = PricingConfig()
 
 def on_session_purged_callback(session_id: str):
     if session_id in active_sessions:
@@ -173,22 +181,33 @@ async def operator_websocket(websocket: WebSocket):
         await websocket.send_json({
             "event": "INITIAL_SNAPSHOT",
             "payload": [s.model_dump() for s in active_sessions.values()],
-            "gateway_state": gateway_state
+            "gateway_state": gateway_state,
+            "pricing": pricing_settings.model_dump()
         })
         while True:
             await websocket.receive_text()
     except WebSocketDisconnect:
         ws_manager.disconnect(websocket)
 
+# --- Pricing Configuration Endpoints ---
+@app.get(f"{settings.API_V1_STR}/settings/pricing")
+async def get_pricing_settings():
+    return pricing_settings.model_dump()
+
+@app.post(f"{settings.API_V1_STR}/settings/pricing")
+async def update_pricing_settings(config: PricingConfig):
+    global pricing_settings
+    pricing_settings = config
+    await ws_manager.broadcast_event("PRICING_UPDATED", pricing_settings.model_dump())
+    return {"status": "UPDATED", "pricing": pricing_settings.model_dump()}
+
 # --- Gateway Pairing Endpoints ---
 @app.get(f"{settings.API_V1_STR}/gateway/status")
 async def get_gateway_status():
-    """Returns current pairing state and active QR data URL for newly opened browsers."""
     return gateway_state
 
 @app.post(f"{settings.API_V1_STR}/gateway/qr-state")
 async def update_gateway_qr_state(payload: Dict[str, Any]):
-    """Receives QR updates from Node.js sidecar and broadcasts to all browser screens."""
     global gateway_state
     gateway_state["status"] = payload.get("status", "DISCONNECTED")
     gateway_state["qr_image"] = payload.get("qr_image")
@@ -304,7 +323,6 @@ async def download_master_pdf(session_id: str):
 
 @app.post(f"{settings.API_V1_STR}/sessions/{{session_id}}/complete")
 async def complete_session(session_id: str):
-    """Marks an order as completed/handed-over, updating active dashboard queues and scheduling 15m purge."""
     session = active_sessions.get(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Customer session not found.")
@@ -316,13 +334,11 @@ async def complete_session(session_id: str):
     except Exception:
         pass
 
-    # Schedule 15-minute automatic disk purge (900 seconds)
     asyncio.create_task(schedule_delayed_purge(session_id, delay_seconds=900))
     return {"status": "SUCCESS", "session_id": session_id, "purge_in_seconds": 900}
 
 @app.post(f"{settings.API_V1_STR}/sessions/clear-completed")
 async def clear_all_completed_sessions():
-    """Immediately flushes all completed sessions from memory and triggers a storage disk wipe."""
     completed_ids = [sid for sid, s in active_sessions.items() if s.status == SessionStatus.COMPLETED]
     for sid in completed_ids:
         session = active_sessions.pop(sid, None)

@@ -147,9 +147,29 @@ async function startWhatsAppGateway() {
     if (!['notify', 'append'].includes(type)) return;
 
     for (const msg of messages) {
-      if (!msg.message || msg.key?.fromMe) continue;
+      if (!msg.message) continue;
 
       const senderJid = msg.key?.remoteJid || '';
+
+      // --- SELF-TESTING MODE TOGGLE (Set to false before final production launch) ---
+      const ALLOW_SELF_TESTING = true;
+
+      // Extract your own phone user ID from the active WhatsApp connection state
+      const myJid = sock.user?.id ? jidNormalizedUser(sock.user.id) : '';
+      const isSelfChat = senderJid === myJid;
+
+      if (msg.key?.fromMe) {
+        if (!ALLOW_SELF_TESTING || !isSelfChat) {
+          continue; // Ignore outgoing messages sent to other people
+        }
+        console.log('[GATEWAY] Processing self-test document from "Message yourself"...');
+      }
+      // -------------------------------------------------------------------------------
+
+      // 1. FILTER: Ignore WhatsApp Status / Stories updates completely
+      if (senderJid === 'status@broadcast' || senderJid.includes('broadcast')) {
+        continue;
+      }
 
       // 1. FILTER: Ignore WhatsApp Status / Stories updates completely
       if (senderJid === 'status@broadcast' || senderJid.includes('broadcast')) {

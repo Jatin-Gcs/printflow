@@ -14,7 +14,9 @@ import {
   Cpu,
   Trash2,
   Settings,
-  X
+  X,
+  Eye,
+  LogOut
 } from 'lucide-react';
 
 interface DocumentMetadata {
@@ -42,9 +44,14 @@ interface PricingConfig {
   rate_duplex: number;
 }
 
+interface OperatorDashboardProps {
+  shopId?: string;
+  onLogout?: () => void;
+}
+
 const LOCAL_BRIDGE_URL = 'https://writing-cooperative-naval-jersey.trycloudflare.com';
 
-export const OperatorDashboard: React.FC = () => {
+export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = 'default', onLogout }) => {
   const API_BASE = useMemo(() => {
     return (import.meta as any).env?.VITE_API_URL || `http://${window.location.hostname}:8000`;
   }, []);
@@ -71,6 +78,7 @@ export const OperatorDashboard: React.FC = () => {
   const [isBridgeOnline, setIsBridgeOnline] = useState(false);
   const [isSpooling, setIsSpooling] = useState(false);
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
+  const [loadingDocId, setLoadingDocId] = useState<string | null>(null);
 
   const searchInputRef = useRef<HTMLInputElement>(null);
   const socketRef = useRef<WebSocket | null>(null);
@@ -108,7 +116,7 @@ export const OperatorDashboard: React.FC = () => {
 
     detectPrinters();
 
-    fetch(`${API_BASE}/api/v1/settings/pricing`)
+    fetch(`${API_BASE}/api/v1/settings/pricing?shop_id=${shopId}`)
       .then((res) => res.json())
       .then((data) => {
         setPricing(data);
@@ -125,11 +133,11 @@ export const OperatorDashboard: React.FC = () => {
         }
       })
       .catch(() => {});
-  }, [API_BASE]);
+  }, [API_BASE, shopId]);
 
   // WebSocket Live Stream
   useEffect(() => {
-    const wsUrl = `${WS_BASE}/ws/operator`;
+    const wsUrl = `${WS_BASE}/ws/operator?shop_id=${shopId}`;
     const ws = new WebSocket(wsUrl);
     socketRef.current = ws;
 
@@ -153,11 +161,11 @@ export const OperatorDashboard: React.FC = () => {
             setEditSimplex(msg.pricing.rate_simplex.toFixed(2));
             setEditDuplex(msg.pricing.rate_duplex.toFixed(2));
           }
-        } else if (msg.event === 'SESSION_UPDATED') {
+        } else if (msg.event === `SESSION_UPDATED:${shopId}`) {
           const updated: SessionState = msg.payload;
           setSessions((prev) => ({ ...prev, [updated.session_id]: updated }));
           setSelectedSessionId((curr) => curr || updated.session_id);
-        } else if (msg.event === 'SESSION_PURGED') {
+        } else if (msg.event === `SESSION_PURGED:${shopId}`) {
           const purgedId = msg.payload.session_id;
           setSessions((prev) => {
             const next = { ...prev };
@@ -165,10 +173,14 @@ export const OperatorDashboard: React.FC = () => {
             return next;
           });
           setSelectedSessionId((curr) => (curr === purgedId ? null : curr));
-        } else if (msg.event === 'PRICING_UPDATED') {
+        } else if (msg.event === `PRICING_UPDATED:${shopId}`) {
           setPricing(msg.payload);
           setEditSimplex(msg.payload.rate_simplex.toFixed(2));
           setEditDuplex(msg.payload.rate_duplex.toFixed(2));
+        } else if (msg.event === `GATEWAY_STATUS_UPDATED:${shopId}`) {
+          if (msg.payload.status === 'LOGGED_OUT' || msg.payload.status === 'SCAN_REQUIRED') {
+            if (onLogout) onLogout();
+          }
         } else if (msg.event === 'AUTO_PRINT_TOGGLED') {
           setAutoPrint(msg.payload.auto_print);
         }
@@ -178,7 +190,7 @@ export const OperatorDashboard: React.FC = () => {
     };
 
     return () => ws.close();
-  }, [WS_BASE, selectedSessionId]);
+  }, [WS_BASE, selectedSessionId, shopId, onLogout]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -195,13 +207,24 @@ export const OperatorDashboard: React.FC = () => {
     return () => window.removeEventListener('keydown', handleKeyDown);
   });
 
+  const handleLogoutWhatsApp = async () => {
+    if (confirm("Disconnect WhatsApp from this counter? A fresh QR code will be generated.")) {
+      try {
+        await fetch(`${API_BASE}/api/v1/gateway/logout?shop_id=${shopId}`, { method: 'POST' });
+        if (onLogout) onLogout();
+      } catch (err) {
+        alert(`Logout error: ${err}`);
+      }
+    }
+  };
+
   const handleSavePricing = async () => {
     const payload: PricingConfig = {
       rate_simplex: parseFloat(editSimplex) || 2.0,
       rate_duplex: parseFloat(editDuplex) || 3.0
     };
     try {
-      await fetch(`${API_BASE}/api/v1/settings/pricing`, {
+      await fetch(`${API_BASE}/api/v1/settings/pricing?shop_id=${shopId}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
@@ -227,7 +250,7 @@ export const OperatorDashboard: React.FC = () => {
 
   const handleCompleteSession = async (sessionId: string) => {
     try {
-      await fetch(`${API_BASE}/api/v1/sessions/${sessionId}/complete`, {
+      await fetch(`${API_BASE}/api/v1/sessions/${sessionId}/complete?shop_id=${shopId}`, {
         method: 'POST'
       });
       const nextRemaining = Object.values(sessions).filter(
@@ -243,7 +266,7 @@ export const OperatorDashboard: React.FC = () => {
 
   const handleClearAllCompleted = async () => {
     try {
-      await fetch(`${API_BASE}/api/v1/sessions/clear-completed`, {
+      await fetch(`${API_BASE}/api/v1/sessions/clear-completed?shop_id=${shopId}`, {
         method: 'POST'
       });
     } catch (err) {
@@ -298,12 +321,12 @@ export const OperatorDashboard: React.FC = () => {
     });
   };
 
-  // View & Print Handler: Streams PDF to in-memory preview tab (zero disk download)
-  const handlePreviewAndPrint = async () => {
+  // View & Print with Auto-Trigger Print Window (Master PDF)
+  const handlePreviewAndPrintMaster = async () => {
     if (!activeSession) return;
     setIsPreviewLoading(true);
     try {
-      const url = `${API_BASE}/api/v1/sessions/${activeSession.session_id}/download`;
+      const url = `${API_BASE}/api/v1/sessions/${activeSession.session_id}/download?shop_id=${shopId}`;
       const response = await fetch(url);
       if (!response.ok) throw new Error('Failed to compile master document.');
 
@@ -315,7 +338,6 @@ export const OperatorDashboard: React.FC = () => {
         alert('Popup blocked. Please allow popups for this site to preview documents.');
       }
 
-      // Revoke in-memory blob after 60s to free RAM
       setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
     } catch (err) {
       alert(`Preview error: ${err}`);
@@ -324,19 +346,44 @@ export const OperatorDashboard: React.FC = () => {
     }
   };
 
+  // Preview & Print Individual File with Auto-Trigger
+  const handlePreviewSingleDoc = async (docId: string) => {
+    if (!activeSession) return;
+    setLoadingDocId(docId);
+    try {
+      const url = `${API_BASE}/api/v1/sessions/${activeSession.session_id}/documents/${docId}/preview?shop_id=${shopId}`;
+      const response = await fetch(url);
+      if (!response.ok) throw new Error('Document is still normalizing.');
+
+      const blob = await response.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      
+      const previewWindow = window.open(blobUrl, '_blank');
+      if (!previewWindow) {
+        alert('Popup blocked. Please allow popups for this site to preview documents.');
+      }
+
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
+    } catch (err) {
+      alert(`Document view error: ${err}`);
+    } finally {
+      setLoadingDocId(null);
+    }
+  };
+
   const handlePrintDirect = async () => {
     if (!activeSession) return;
     setIsSpooling(true);
     try {
       if (isBridgeOnline) {
-        const pdfDownloadUrl = `${API_BASE}/api/v1/sessions/${activeSession.session_id}/download`;
+        const pdfDownloadUrl = `${API_BASE}/api/v1/sessions/${activeSession.session_id}/download?shop_id=${shopId}`;
         const res = await fetch(`${LOCAL_BRIDGE_URL}/spool?pdf_url=${encodeURIComponent(pdfDownloadUrl)}&printer_name=${encodeURIComponent(selectedPrinter)}`, {
           method: 'POST'
         });
         if (!res.ok) throw new Error('Local bridge failed to dispatch job to Windows driver.');
       } else {
         await fetch(
-          `${API_BASE}/api/v1/sessions/${activeSession.session_id}/dispatch`,
+          `${API_BASE}/api/v1/sessions/${activeSession.session_id}/dispatch?shop_id=${shopId}`,
           {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -394,7 +441,7 @@ export const OperatorDashboard: React.FC = () => {
             </div>
             <div>
               <span className="font-bold tracking-tight text-base flex items-center gap-1.5">
-                PrintFlow <span className="text-[10px] uppercase font-mono px-1.5 py-0.5 bg-indigo-500/20 text-indigo-400 border border-indigo-500/30 rounded">POS Hub</span>
+                PrintFlow <span className="text-[10px] uppercase font-mono px-1.5 py-0.5 bg-indigo-500/20 text-indigo-400 border border-indigo-500/30 rounded">{shopId.slice(0, 8)}</span>
               </span>
               <div className="flex items-center gap-3 text-xs text-slate-400 mt-0.5">
                 <span className="flex items-center gap-1.5">
@@ -414,7 +461,7 @@ export const OperatorDashboard: React.FC = () => {
         </div>
 
         {/* Omnibar Search */}
-        <div className="relative w-80">
+        <div className="relative w-72">
           <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
           <input
             ref={searchInputRef}
@@ -429,8 +476,8 @@ export const OperatorDashboard: React.FC = () => {
           </kbd>
         </div>
 
-        {/* Global Controls & Pricing Settings */}
-        <div className="flex items-center gap-4 text-xs font-medium">
+        {/* Controls, Pricing Settings & Logout */}
+        <div className="flex items-center gap-3 text-xs font-medium">
           <div className="flex items-center gap-2">
             <span className="text-slate-400">Target Printer:</span>
             <select
@@ -472,6 +519,15 @@ export const OperatorDashboard: React.FC = () => {
           >
             <Settings className="w-4 h-4 text-indigo-400" />
             <span className="font-semibold">Price Settings</span>
+          </button>
+
+          <button
+            onClick={handleLogoutWhatsApp}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-rose-900/60 bg-rose-950/40 hover:bg-rose-900/60 text-rose-300 transition"
+            title="Unlink WhatsApp from this counter and reset QR"
+          >
+            <LogOut className="w-3.5 h-3.5 text-rose-400" />
+            <span className="font-semibold">Logout</span>
           </button>
         </div>
       </header>
@@ -631,11 +687,12 @@ export const OperatorDashboard: React.FC = () => {
                 </div>
               </div>
 
-              {/* Document List */}
+              {/* Document List with Individual View & Print Actions */}
               <div className="flex-1 overflow-y-auto p-6 space-y-3 pb-28">
                 {activeSession.documents.map((doc) => {
                   const isImage = doc.original_filename.match(/\.(jpg|jpeg|png|webp)$/i);
                   const isOddDouble = doc.print_mode === 'DUPLEX' && doc.page_count % 2 !== 0;
+                  const isThisDocLoading = loadingDocId === doc.id;
 
                   return (
                     <div
@@ -672,27 +729,45 @@ export const OperatorDashboard: React.FC = () => {
                         </div>
                       </div>
 
-                      <div className="bg-slate-950 p-1 rounded-xl border border-slate-800 flex items-center">
+                      <div className="flex items-center gap-3">
+                        {/* Individual File Preview & Print Trigger */}
                         <button
-                          onClick={() => handleModeChange(doc.id, 'SIMPLEX')}
-                          className={`px-3.5 py-1.5 text-xs font-semibold rounded-lg transition ${
-                            doc.print_mode === 'SIMPLEX'
-                              ? 'bg-indigo-600 text-white shadow'
-                              : 'text-slate-400 hover:text-slate-200'
-                          }`}
+                          onClick={() => handlePreviewSingleDoc(doc.id)}
+                          disabled={isThisDocLoading}
+                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-700 bg-slate-800/80 hover:bg-slate-750 text-slate-300 hover:text-slate-100 text-xs font-medium transition"
+                          title="Preview and print this single document"
                         >
-                          Single-Sided
+                          {isThisDocLoading ? (
+                            <RefreshCw className="w-3.5 h-3.5 animate-spin text-indigo-400" />
+                          ) : (
+                            <Eye className="w-3.5 h-3.5 text-indigo-400" />
+                          )}
+                          <span>Print File</span>
                         </button>
-                        <button
-                          onClick={() => handleModeChange(doc.id, 'DUPLEX')}
-                          className={`px-3.5 py-1.5 text-xs font-semibold rounded-lg transition ${
-                            doc.print_mode === 'DUPLEX'
-                              ? 'bg-indigo-600 text-white shadow'
-                              : 'text-slate-400 hover:text-slate-200'
-                          }`}
-                        >
-                          Double-Sided
-                        </button>
+
+                        {/* Duplex / Simplex Toggle */}
+                        <div className="bg-slate-950 p-1 rounded-xl border border-slate-800 flex items-center">
+                          <button
+                            onClick={() => handleModeChange(doc.id, 'SIMPLEX')}
+                            className={`px-3 py-1 text-xs font-semibold rounded-lg transition ${
+                              doc.print_mode === 'SIMPLEX'
+                                ? 'bg-indigo-600 text-white shadow'
+                                : 'text-slate-400 hover:text-slate-200'
+                            }`}
+                          >
+                            Single
+                          </button>
+                          <button
+                            onClick={() => handleModeChange(doc.id, 'DUPLEX')}
+                            className={`px-3 py-1 text-xs font-semibold rounded-lg transition ${
+                              doc.print_mode === 'DUPLEX'
+                                ? 'bg-indigo-600 text-white shadow'
+                                : 'text-slate-400 hover:text-slate-200'
+                            }`}
+                          >
+                            Double
+                          </button>
+                        </div>
                       </div>
                     </div>
                   );
@@ -729,19 +804,19 @@ export const OperatorDashboard: React.FC = () => {
                 </div>
 
                 <div className="flex items-center gap-3">
-                  {/* View & Print in-memory preview button */}
+                  {/* Master PDF View & Print Trigger */}
                   <button
-                    onClick={handlePreviewAndPrint}
+                    onClick={handlePreviewAndPrintMaster}
                     disabled={isPreviewLoading}
                     className="flex items-center gap-2 px-4 py-2.5 rounded-xl border border-indigo-700/60 bg-indigo-950/40 hover:bg-indigo-900/60 text-indigo-200 text-xs font-semibold transition shadow-md"
-                    title="Open compiled document in preview tab (Ctrl + P to print)"
+                    title="View & Print combined batch"
                   >
                     {isPreviewLoading ? (
                       <RefreshCw className="w-4 h-4 animate-spin text-indigo-400" />
                     ) : (
                       <FileText className="w-4 h-4 text-indigo-400" />
                     )}
-                    <span>{isPreviewLoading ? 'Compiling PDF...' : 'View & Print (No Download)'}</span>
+                    <span>{isPreviewLoading ? 'Compiling PDF...' : 'Print Master PDF'}</span>
                   </button>
 
                   <button

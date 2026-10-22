@@ -179,11 +179,28 @@ async def update_gateway_qr_state(payload: Dict[str, Any]):
 
 @app.post(f"{settings.API_V1_STR}/gateway/logout")
 async def logout_gateway(shop_id: str = Query("default")):
+    """Forwards logout to the WhatsApp sidecar and guarantees a 200 OK response to the UI."""
     try:
-        res = requests.post(f"{GATEWAY_SIDECAR_URL}/api/gateway/logout", json={"shop_id": shop_id}, timeout=5)
-        return res.json()
+        requests.post(
+            f"{GATEWAY_SIDECAR_URL}/api/gateway/logout",
+            json={"shop_id": shop_id},
+            timeout=4
+        )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        print(f"[GATEWAY] Logout sidecar call notice (handled gracefully): {e}")
+
+    # Always ensure in-memory gateway state is reset and broadcasted
+    gateway_states[shop_id] = {
+        "status": "LOGGED_OUT",
+        "qr_image": None,
+        "updated_at": time.time()
+    }
+    try:
+        await ws_manager.broadcast_event(f"GATEWAY_STATUS_UPDATED:{shop_id}", gateway_states[shop_id])
+    except Exception:
+        pass
+
+    return {"status": "LOGGED_OUT", "shop_id": shop_id}
 
 @app.get(f"{settings.API_V1_STR}/settings/pricing")
 async def get_pricing_settings(shop_id: str = "default"):

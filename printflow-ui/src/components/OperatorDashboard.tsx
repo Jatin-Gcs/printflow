@@ -218,18 +218,16 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
       });
       if (!res.ok) throw new Error('Backend failed to process logout');
 
-      // Clear sessions from UI state
+      // Clear sessions from state
       setSessions({});
       setSelectedSessionId(null);
 
-      // Trigger redirect to Pairing screen
+      // Instantly switch view back to Pairing without needing page refresh
       if (onLogout) {
         onLogout();
-      } else {
-        window.location.reload();
       }
     } catch (err) {
-      alert(`Logout error: ${err}. Resetting screen.`);
+      alert(`Logout error: ${err}`);
       if (onLogout) onLogout();
     }
   };

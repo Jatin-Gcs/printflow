@@ -1,29 +1,46 @@
 import React, { useState, useEffect } from 'react';
 import { OperatorDashboard } from './components/OperatorDashboard';
 import { PairingScreen } from './components/PairingScreen';
+import { getOrCreateShopId } from './utils/shopSession';
 
 const App: React.FC = () => {
-  const [currentView, setCurrentView] = useState<'PAIRING' | 'DASHBOARD'>('DASHBOARD');
+  const [currentView, setCurrentView] = useState<'PAIRING' | 'DASHBOARD'>('PAIRING');
+  const shopId = getOrCreateShopId();
+
+  const checkStatus = async () => {
+    try {
+      const apiBase = (import.meta as any).env?.VITE_API_URL || `http://${window.location.hostname}:8000`;
+      const res = await fetch(`${apiBase}/api/v1/gateway/status?shop_id=${shopId}`);
+      const data = await res.json();
+      if (data.status === 'CONNECTED') {
+        setCurrentView('DASHBOARD');
+      } else {
+        setCurrentView('PAIRING');
+      }
+    } catch {
+      setCurrentView('PAIRING');
+    }
+  };
 
   useEffect(() => {
-    const apiBase = (import.meta as any).env?.VITE_API_URL || `http://${window.location.hostname}:8000`;
-    fetch(`${apiBase}/api/v1/gateway/status`)
-      .then((res) => res.json())
-      .then((data) => {
-        if (data.status === 'SCAN_REQUIRED' || data.status === 'LOGGED_OUT') {
-          setCurrentView('PAIRING');
-        } else {
-          setCurrentView('DASHBOARD');
-        }
-      })
-      .catch(() => setCurrentView('DASHBOARD'));
-  }, []);
+    checkStatus();
+  }, [shopId]);
 
   if (currentView === 'PAIRING') {
-    return <PairingScreen onPaired={() => setCurrentView('DASHBOARD')} />;
+    return (
+      <PairingScreen
+        shopId={shopId}
+        onPaired={() => setCurrentView('DASHBOARD')}
+      />
+    );
   }
 
-  return <OperatorDashboard />;
+  return (
+    <OperatorDashboard
+      shopId={shopId}
+      onLogout={() => setCurrentView('PAIRING')}
+    />
+  );
 };
 
 export default App;

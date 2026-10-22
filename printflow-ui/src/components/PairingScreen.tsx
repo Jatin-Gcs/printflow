@@ -1,60 +1,75 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { 
-  CheckCircle2, 
-  RefreshCw, 
-  ShieldCheck, 
-  ArrowRight,
-  Printer
-} from 'lucide-react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { CheckCircle2, RefreshCw, ShieldCheck, ArrowRight, Printer } from 'lucide-react';
 
 interface PairingScreenProps {
+  shopId: string;
   onPaired: () => void;
 }
 
-export const PairingScreen: React.FC<PairingScreenProps> = ({ onPaired }) => {
+export const PairingScreen: React.FC<PairingScreenProps> = ({ shopId, onPaired }) => {
   const API_BASE = useMemo(() => {
     return (import.meta as any).env?.VITE_API_URL || `http://${window.location.hostname}:8000`;
   }, []);
 
-  const WS_BASE = useMemo(() => {
-    return API_BASE.replace(/^http/, 'ws');
-  }, [API_BASE]);
-
+  const WS_BASE = useMemo(() => API_BASE.replace(/^http/, 'ws'), [API_BASE]);
   const [gatewayStatus, setGatewayStatus] = useState<string>('CONNECTING');
   const [qrImage, setQrImage] = useState<string | null>(null);
+  const pollIntervalRef = useRef<any>(null);
 
   useEffect(() => {
-    fetch(`${API_BASE}/api/v1/gateway/status`)
-      .then((res) => res.json())
-      .then((data) => {
+    // 1. Initial snapshot fetch
+    const fetchStatus = async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/v1/gateway/status?shop_id=${shopId}`);
+        const data = await res.json();
         setGatewayStatus(data.status);
-        setQrImage(data.qr_image);
+        if (data.qr_image) setQrImage(data.qr_image);
         if (data.status === 'CONNECTED') {
           onPaired();
         }
-      })
-      .catch(() => setGatewayStatus('DISCONNECTED'));
+      } catch {
+        setGatewayStatus('DISCONNECTED');
+      }
+    };
 
-    const wsUrl = `${WS_BASE}/ws/operator`;
+    fetchStatus();
+
+    // 2. Poll every 2 seconds while on pairing screen (guarantees auto-redirect even if WS dropped)
+    pollIntervalRef.current = setInterval(fetchStatus, 2000);
+
+    // 3. WebSocket listener for instant zero-lag updates
+    const wsUrl = `${WS_BASE}/ws/operator?shop_id=${shopId}`;
     const ws = new WebSocket(wsUrl);
 
     ws.onmessage = (event) => {
       try {
         const msg = JSON.parse(event.data);
-        if (msg.event === 'GATEWAY_STATUS_UPDATED') {
-          setGatewayStatus(msg.payload.status);
-          setQrImage(msg.payload.qr_image);
-          if (msg.payload.status === 'CONNECTED') {
-            onPaired();
-          }
+        
+        // Handle initial snapshot
+        if (msg.event === 'INITIAL_SNAPSHOT') {
+          const status = msg.gateway_state?.status;
+          if (status) setGatewayStatus(status);
+          if (msg.gateway_state?.qr_image) setQrImage(msg.gateway_state.qr_image);
+          if (status === 'CONNECTED') onPaired();
+        }
+
+        // Handle live QR or connection updates
+        if (msg.event === `GATEWAY_STATUS_UPDATED:${shopId}`) {
+          const status = msg.payload?.status;
+          if (status) setGatewayStatus(status);
+          if (msg.payload?.qr_image) setQrImage(msg.payload.qr_image);
+          if (status === 'CONNECTED') onPaired();
         }
       } catch (err) {
-        console.error('Socket message parse error:', err);
+        console.error('Error handling pairing event:', err);
       }
     };
 
-    return () => ws.close();
-  }, [API_BASE, WS_BASE, onPaired]);
+    return () => {
+      ws.close();
+      if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
+    };
+  }, [API_BASE, WS_BASE, shopId, onPaired]);
 
   return (
     <div className="h-screen w-screen flex flex-col items-center justify-center bg-[#070A11] text-slate-100 select-none p-6 font-sans">
@@ -75,7 +90,7 @@ export const PairingScreen: React.FC<PairingScreenProps> = ({ onPaired }) => {
             </div>
             <h2 className="text-lg font-bold text-slate-100">WhatsApp Linked Successfully</h2>
             <p className="text-xs text-slate-400 max-w-xs">
-              Your counter is paired. Incoming customer files will automatically appear on the POS dashboard.
+              Redirecting to counter dashboard...
             </p>
             <button
               onClick={onPaired}
@@ -88,23 +103,19 @@ export const PairingScreen: React.FC<PairingScreenProps> = ({ onPaired }) => {
         ) : (
           <>
             <div className="text-center mb-6">
-              <h2 className="text-lg font-bold text-slate-100">Link Shop WhatsApp</h2>
+              <h2 className="text-lg font-bold text-slate-100">Link Counter WhatsApp</h2>
               <p className="text-xs text-slate-400 mt-1">
-                Scan the QR code below using the shop's counter smartphone.
+                Workspace: <span className="font-mono text-indigo-400 font-bold">{shopId}</span>
               </p>
             </div>
 
             <div className="relative w-64 h-64 bg-white rounded-2xl p-3 shadow-inner flex items-center justify-center border-4 border-slate-800/40">
               {qrImage ? (
-                <img
-                  src={qrImage}
-                  alt="WhatsApp Pairing QR"
-                  className="w-full h-full object-contain rounded-lg"
-                />
+                <img src={qrImage} alt="WhatsApp Pairing QR" className="w-full h-full object-contain rounded-lg" />
               ) : (
                 <div className="flex flex-col items-center justify-center space-y-3 text-slate-400">
                   <RefreshCw className="w-8 h-8 animate-spin text-indigo-500" />
-                  <span className="text-[11px] font-mono">Generating secure key...</span>
+                  <span className="text-[11px] font-mono">Generating dedicated QR...</span>
                 </div>
               )}
             </div>
@@ -112,21 +123,21 @@ export const PairingScreen: React.FC<PairingScreenProps> = ({ onPaired }) => {
             <div className="w-full mt-6 space-y-2.5 text-xs text-slate-300 bg-slate-900/60 border border-slate-800/80 rounded-xl p-4">
               <div className="flex items-center gap-3">
                 <span className="w-5 h-5 rounded-full bg-indigo-600/20 text-indigo-400 font-mono text-[11px] font-bold flex items-center justify-center border border-indigo-500/30 shrink-0">1</span>
-                <span>Open <strong>WhatsApp</strong> on your shop phone</span>
+                <span>Open <strong>WhatsApp</strong> on shop phone</span>
               </div>
               <div className="flex items-center gap-3">
                 <span className="w-5 h-5 rounded-full bg-indigo-600/20 text-indigo-400 font-mono text-[11px] font-bold flex items-center justify-center border border-indigo-500/30 shrink-0">2</span>
-                <span>Tap <strong>Menu (⋮)</strong> or <strong>Settings</strong> → <strong>Linked Devices</strong></span>
+                <span>Tap <strong>Linked Devices</strong> → <strong>Link a Device</strong></span>
               </div>
               <div className="flex items-center gap-3">
                 <span className="w-5 h-5 rounded-full bg-indigo-600/20 text-indigo-400 font-mono text-[11px] font-bold flex items-center justify-center border border-indigo-500/30 shrink-0">3</span>
-                <span>Tap <strong>Link a Device</strong> and point your camera here</span>
+                <span>Point camera at this screen to pair</span>
               </div>
             </div>
 
             <div className="mt-6 flex items-center gap-2 text-[11px] text-slate-400 font-mono">
               <ShieldCheck className="w-4 h-4 text-emerald-400" />
-              <span>Multi-device local end-to-end encrypted link</span>
+              <span>Isolated shop credential store</span>
             </div>
           </>
         )}

@@ -95,7 +95,7 @@ async function getOrInitSocket(shopId = 'default') {
     printQRInTerminal: false,
     syncFullHistory: false,
     logger: pino({ level: 'error' }),
-    browser: [`PrintFlow Counter (${shopId.slice(0, 8)})`, 'Chrome', '1.0.0'],
+    browser: ['PrintFlow POS', 'Desktop', '1.0.0'],
     keepAliveIntervalMs: 25000,
     defaultQueryTimeoutMs: 60000,
     connectTimeoutMs: 60000

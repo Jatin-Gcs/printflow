@@ -9,21 +9,25 @@ import path from 'path';
 import axios from 'axios';
 import QRCode from 'qrcode';
 import pino from 'pino';
+import express from 'express';
+import cors from 'cors';
 
 const INGRESS_BASE_DIR = process.env.INGRESS_DIR || path.resolve('../storage/ingress');
 const FASTAPI_ENDPOINT = process.env.API_ENDPOINT || 'http://127.0.0.1:8000/api/v1/queue/inbound-document';
 const FASTAPI_QR_ENDPOINT = process.env.QR_ENDPOINT || 'http://127.0.0.1:8000/api/v1/gateway/qr-state';
-const AUTH_FOLDER = path.resolve('auth_info_baileys');
+const AUTH_BASE_DIR = path.resolve('auth_info_baileys');
+const GATEWAY_PORT = process.env.GATEWAY_PORT || 3001;
 
-// Allowed document & image types for counter printing
 const ALLOWED_MIME_TYPES = new Set([
   'application/pdf',
   'image/jpeg',
   'image/png',
   'image/webp',
-  'application/vnd.openxmlformats-officedocument.wordprocessingml.document', // .docx
-  'application/msword' // .doc
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/msword'
 ]);
+
+const activeSockets = new Map();
 
 function extractPhoneNumber(msg) {
   const key = msg.key || {};
@@ -74,30 +78,36 @@ function unwrapMediaMessage(rawMessage) {
   return { type: null, media: null, rootMsg: null };
 }
 
-async function startWhatsAppGateway() {
-  if (!fs.existsSync(INGRESS_BASE_DIR)) {
-    fs.mkdirSync(INGRESS_BASE_DIR, { recursive: true });
+async function getOrInitSocket(shopId = 'default') {
+  if (activeSockets.has(shopId)) {
+    return activeSockets.get(shopId);
   }
 
-  const { state, saveCreds } = await useMultiFileAuthState(AUTH_FOLDER);
+  const shopAuthFolder = path.join(AUTH_BASE_DIR, shopId);
+  if (!fs.existsSync(shopAuthFolder)) {
+    fs.mkdirSync(shopAuthFolder, { recursive: true });
+  }
+
+  const { state, saveCreds } = await useMultiFileAuthState(shopAuthFolder);
 
   const sock = makeWASocket({
     auth: state,
     printQRInTerminal: false,
     syncFullHistory: false,
     logger: pino({ level: 'error' }),
-    browser: ['PrintFlow Counter POS', 'Chrome', '1.0.0'],
+    browser: [`PrintFlow Counter (${shopId.slice(0, 8)})`, 'Chrome', '1.0.0'],
     keepAliveIntervalMs: 25000,
     defaultQueryTimeoutMs: 60000,
     connectTimeoutMs: 60000
   });
+
+  activeSockets.set(shopId, sock);
 
   sock.ev.on('creds.update', saveCreds);
 
   sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect, qr } = update;
 
-    // Relay fresh QR code as a base64 image data URL to FastAPI
     if (qr) {
       try {
         const qrDataUrl = await QRCode.toDataURL(qr, {
@@ -106,12 +116,13 @@ async function startWhatsAppGateway() {
           color: { dark: '#000000', light: '#FFFFFF' }
         });
         await axios.post(FASTAPI_QR_ENDPOINT, {
+          shop_id: shopId,
           status: 'SCAN_REQUIRED',
           qr_image: qrDataUrl
         });
-        console.log('[GATEWAY] Fresh pairing QR code dispatched to web UI.');
+        console.log(`[GATEWAY:${shopId}] Dispatched pairing QR code.`);
       } catch (err) {
-        console.error('[GATEWAY] Failed to relay QR data:', err.message);
+        console.error(`[GATEWAY:${shopId}] Failed to relay QR data:`, err.message);
       }
     }
 
@@ -119,24 +130,24 @@ async function startWhatsAppGateway() {
       const statusCode = lastDisconnect?.error?.output?.statusCode;
       const isExplicitLogout = statusCode === DisconnectReason.loggedOut;
 
-      // Broadcast disconnected state to the browser
+      activeSockets.delete(shopId);
+
       axios.post(FASTAPI_QR_ENDPOINT, {
+        shop_id: shopId,
         status: isExplicitLogout ? 'LOGGED_OUT' : 'DISCONNECTED',
         qr_image: null
       }).catch(() => {});
 
       if (!isExplicitLogout) {
-        setTimeout(startWhatsAppGateway, 3000);
+        console.log(`[GATEWAY:${shopId}] Socket disconnected. Reconnecting in 3s...`);
+        setTimeout(() => getOrInitSocket(shopId), 3000);
       } else {
-        if (fs.existsSync(AUTH_FOLDER)) {
-          fs.rmSync(AUTH_FOLDER, { recursive: true, force: true });
-        }
-        setTimeout(startWhatsAppGateway, 1000);
+        console.log(`[GATEWAY:${shopId}] Cleaned up session after logout.`);
       }
     } else if (connection === 'open') {
-      console.log('[GATEWAY] Connected to WhatsApp Web socket.');
-      // Notify web browser that the pairing succeeded
+      console.log(`[GATEWAY:${shopId}] Connected to WhatsApp Web.`);
       axios.post(FASTAPI_QR_ENDPOINT, {
+        shop_id: shopId,
         status: 'CONNECTED',
         qr_image: null
       }).catch(() => {});
@@ -147,41 +158,14 @@ async function startWhatsAppGateway() {
     if (!['notify', 'append'].includes(type)) return;
 
     for (const msg of messages) {
-      if (!msg.message) continue;
+      if (!msg.message || msg.key?.fromMe) continue;
 
       const senderJid = msg.key?.remoteJid || '';
 
-      // --- SELF-TESTING MODE TOGGLE (Set to false before final production launch) ---
-      const ALLOW_SELF_TESTING = true;
-
-      // Extract your own phone user ID from the active WhatsApp connection state
-      const myJid = sock.user?.id ? jidNormalizedUser(sock.user.id) : '';
-      const isSelfChat = senderJid === myJid;
-
-      if (msg.key?.fromMe) {
-        if (!ALLOW_SELF_TESTING || !isSelfChat) {
-          continue; // Ignore outgoing messages sent to other people
-        }
-        console.log('[GATEWAY] Processing self-test document from "Message yourself"...');
-      }
-      // -------------------------------------------------------------------------------
-
-      // 1. FILTER: Ignore WhatsApp Status / Stories updates completely
-      if (senderJid === 'status@broadcast' || senderJid.includes('broadcast')) {
+      if (senderJid === 'status@broadcast' || senderJid.includes('broadcast') || senderJid.endsWith('@g.us')) {
         continue;
       }
 
-      // 1. FILTER: Ignore WhatsApp Status / Stories updates completely
-      if (senderJid === 'status@broadcast' || senderJid.includes('broadcast')) {
-        continue;
-      }
-
-      // 2. FILTER: Ignore group chats (only process direct 1-to-1 customer messages)
-      if (senderJid.endsWith('@g.us')) {
-        continue;
-      }
-
-      // 3. FILTER: Ignore historical backfills older than 5 minutes (300 seconds)
       const msgTimestamp = Number(msg.messageTimestamp || 0);
       const nowTimestamp = Math.floor(Date.now() / 1000);
       if (msgTimestamp > 0 && nowTimestamp - msgTimestamp > 300) {
@@ -189,20 +173,12 @@ async function startWhatsAppGateway() {
       }
 
       const { type: mediaType, media, rootMsg } = unwrapMediaMessage(msg.message);
-      if (!mediaType || !media) continue;
+      if (!mediaType || !media || !media.mediaKey) continue;
 
-      // 4. GUARD: Prevent 'Cannot derive from empty media key' crash
-      if (!media.mediaKey || (Buffer.isBuffer(media.mediaKey) && media.mediaKey.length === 0)) {
-        continue;
-      }
-
-      // 5. FILTER: Check MIME type against allowed list
       const rawMime = (media.mimetype || '').split(';')[0].toLowerCase();
       const detectedMime = rawMime || (mediaType === 'imageMessage' ? 'image/jpeg' : 'application/pdf');
 
-      if (!ALLOWED_MIME_TYPES.has(detectedMime)) {
-        continue;
-      }
+      if (!ALLOWED_MIME_TYPES.has(detectedMime)) continue;
 
       const customerPhone = extractPhoneNumber(msg);
 
@@ -216,18 +192,14 @@ async function startWhatsAppGateway() {
 
         if (!buffer || buffer.length === 0) continue;
 
-        let extension = '.bin';
         let originalFilename = `${msg.key.id}`;
-
         if (mediaType === 'imageMessage') {
-          extension = '.jpg';
           originalFilename = `${msg.key.id}.jpg`;
         } else if (mediaType === 'documentMessage') {
           originalFilename = media.fileName || `${msg.key.id}.pdf`;
-          extension = path.extname(originalFilename) || '.pdf';
         }
 
-        const safeFolder = customerPhone.replace(/[^a-zA-Z0-9]/g, '_');
+        const safeFolder = `${shopId}_${customerPhone.replace(/[^a-zA-Z0-9]/g, '_')}`;
         const customerDir = path.join(INGRESS_BASE_DIR, safeFolder);
         if (!fs.existsSync(customerDir)) {
           fs.mkdirSync(customerDir, { recursive: true });
@@ -236,9 +208,10 @@ async function startWhatsAppGateway() {
         const destinationPath = path.join(customerDir, `${Date.now()}_${originalFilename}`);
         fs.writeFileSync(destinationPath, buffer);
 
-        console.log(`[GATEWAY] Ingested print file: "${originalFilename}" from ${customerPhone}`);
+        console.log(`[GATEWAY:${shopId}] Ingested file "${originalFilename}" from ${customerPhone}`);
 
         await axios.post(FASTAPI_ENDPOINT, {
+          shop_id: shopId,
           customer_phone: customerPhone,
           message_id: msg.key.id,
           file_path: destinationPath,
@@ -249,10 +222,75 @@ async function startWhatsAppGateway() {
         }, { timeout: 10000 });
 
       } catch (err) {
-        console.error(`[GATEWAY] Skipped unreadable media in msg ${msg.key.id}:`, err.message);
+        console.error(`[GATEWAY:${shopId}] Download error on ${msg.key.id}:`, err.message);
       }
     }
   });
+
+  return sock;
 }
 
-startWhatsAppGateway();
+// Sidecar HTTP Controller
+const server = express();
+server.use(cors());
+server.use(express.json());
+
+server.post('/api/gateway/init', async (req, res) => {
+  const shopId = req.body.shop_id || 'default';
+  try {
+    await getOrInitSocket(shopId);
+    res.json({ status: 'INITIALIZING', shop_id: shopId });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+server.post('/api/gateway/logout', async (req, res) => {
+  const shopId = req.body.shop_id || 'default';
+  console.log(`[GATEWAY:${shopId}] Explicit logout triggered.`);
+
+  const sock = activeSockets.get(shopId);
+
+  // 1. Send logout signal to WhatsApp servers to unpair the phone
+  if (sock) {
+    try {
+      await sock.logout();
+    } catch (e) {
+      console.warn(`[GATEWAY:${shopId}] Socket logout warning:`, e.message);
+    }
+    try {
+      sock.end(undefined);
+    } catch (_) {}
+    activeSockets.delete(shopId);
+  }
+
+  // 2. Wipe the session credentials directory completely
+  const shopAuthFolder = path.join(AUTH_BASE_DIR, shopId);
+  if (fs.existsSync(shopAuthFolder)) {
+    try {
+      fs.rmSync(shopAuthFolder, { recursive: true, force: true });
+      console.log(`[GATEWAY:${shopId}] Deleted credentials folder: ${shopAuthFolder}`);
+    } catch (err) {
+      console.error(`[GATEWAY:${shopId}] Error deleting auth directory:`, err.message);
+    }
+  }
+
+  // 3. Inform FastAPI to notify all dashboard sockets
+  await axios.post(FASTAPI_QR_ENDPOINT, {
+    shop_id: shopId,
+    status: 'LOGGED_OUT',
+    qr_image: null
+  }).catch(() => {});
+
+  // 4. Automatically boot a fresh socket instance to present a new pairing QR
+  setTimeout(() => {
+    getOrInitSocket(shopId);
+  }, 1000);
+
+  return res.json({ status: 'LOGGED_OUT', shop_id: shopId });
+});
+
+server.listen(GATEWAY_PORT, () => {
+  console.log(`[GATEWAY-SERVER] Listening on internal port ${GATEWAY_PORT}`);
+  getOrInitSocket('default');
+});

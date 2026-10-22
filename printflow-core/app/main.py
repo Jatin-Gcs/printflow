@@ -297,3 +297,31 @@ async def clear_all_completed_sessions(shop_id: str = "default"):
 @app.get(f"{settings.API_V1_STR}/printers")
 async def get_system_printers():
     return {"printers": ["Default System Printer"], "default": "Default System Printer"}
+
+@app.post(f"{settings.API_V1_STR}/gateway/logout")
+async def logout_gateway(shop_id: str = Query("default")):
+    try:
+        # Call Express sidecar on port 3001
+        res = requests.post(
+            f"{GATEWAY_SIDECAR_URL}/api/gateway/logout",
+            json={"shop_id": shop_id},
+            timeout=8
+        )
+        # Clear in-memory state
+        gateway_states[shop_id] = {
+            "status": "LOGGED_OUT",
+            "qr_image": None,
+            "updated_at": time.time()
+        }
+        await ws_manager.broadcast_event(f"GATEWAY_STATUS_UPDATED:{shop_id}", gateway_states[shop_id])
+        return res.json()
+    except requests.exceptions.RequestException as e:
+        print(f"[ERROR] Gateway logout call failed: {e}")
+        # Force fallback local status reset
+        gateway_states[shop_id] = {
+            "status": "LOGGED_OUT",
+            "qr_image": None,
+            "updated_at": time.time()
+        }
+        await ws_manager.broadcast_event(f"GATEWAY_STATUS_UPDATED:{shop_id}", gateway_states[shop_id])
+        return {"status": "FORCED_LOGOUT_LOCALLY", "shop_id": shop_id}

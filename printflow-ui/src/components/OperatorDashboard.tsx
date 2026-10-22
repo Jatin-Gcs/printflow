@@ -208,13 +208,29 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
   });
 
   const handleLogoutWhatsApp = async () => {
-    if (confirm("Disconnect WhatsApp from this counter? A fresh QR code will be generated.")) {
-      try {
-        await fetch(`${API_BASE}/api/v1/gateway/logout?shop_id=${shopId}`, { method: 'POST' });
-        if (onLogout) onLogout();
-      } catch (err) {
-        alert(`Logout error: ${err}`);
+    if (!confirm("Disconnect WhatsApp from this counter? Your mobile will unpair and a fresh QR code will be generated.")) {
+      return;
+    }
+
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/gateway/logout?shop_id=${shopId}`, {
+        method: 'POST'
+      });
+      if (!res.ok) throw new Error('Backend failed to process logout');
+
+      // Clear sessions from UI state
+      setSessions({});
+      setSelectedSessionId(null);
+
+      // Trigger redirect to Pairing screen
+      if (onLogout) {
+        onLogout();
+      } else {
+        window.location.reload();
       }
+    } catch (err) {
+      alert(`Logout error: ${err}. Resetting screen.`);
+      if (onLogout) onLogout();
     }
   };
 

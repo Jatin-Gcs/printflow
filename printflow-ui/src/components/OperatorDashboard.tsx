@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   Printer,
-  Download,
   FileText,
   Image as ImageIcon,
   Lock,
@@ -71,6 +70,7 @@ export const OperatorDashboard: React.FC = () => {
   const [isConnected, setIsConnected] = useState(false);
   const [isBridgeOnline, setIsBridgeOnline] = useState(false);
   const [isSpooling, setIsSpooling] = useState(false);
+  const [isPreviewLoading, setIsPreviewLoading] = useState(false);
 
   const searchInputRef = useRef<HTMLInputElement>(null);
   const socketRef = useRef<WebSocket | null>(null);
@@ -298,15 +298,30 @@ export const OperatorDashboard: React.FC = () => {
     });
   };
 
-  const handleDownloadMaster = () => {
+  // View & Print Handler: Streams PDF to in-memory preview tab (zero disk download)
+  const handlePreviewAndPrint = async () => {
     if (!activeSession) return;
-    const url = `${API_BASE}/api/v1/sessions/${activeSession.session_id}/download`;
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `PrintFlow_${activeSession.session_id.slice(0, 8)}.pdf`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+    setIsPreviewLoading(true);
+    try {
+      const url = `${API_BASE}/api/v1/sessions/${activeSession.session_id}/download`;
+      const response = await fetch(url);
+      if (!response.ok) throw new Error('Failed to compile master document.');
+
+      const blob = await response.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      
+      const previewWindow = window.open(blobUrl, '_blank');
+      if (!previewWindow) {
+        alert('Popup blocked. Please allow popups for this site to preview documents.');
+      }
+
+      // Revoke in-memory blob after 60s to free RAM
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
+    } catch (err) {
+      alert(`Preview error: ${err}`);
+    } finally {
+      setIsPreviewLoading(false);
+    }
   };
 
   const handlePrintDirect = async () => {
@@ -370,7 +385,7 @@ export const OperatorDashboard: React.FC = () => {
   return (
     <div className="h-screen w-screen flex flex-col overflow-hidden select-none font-sans bg-[#070A11] text-slate-100">
       
-      {/* Top Navbar (Cleaned: No shift counters) */}
+      {/* Top Navbar */}
       <header className="h-16 px-6 border-b flex items-center justify-between shrink-0 bg-[#0B101D]/90 border-slate-800/80 backdrop-blur-md">
         <div className="flex items-center gap-6">
           <div className="flex items-center gap-3">
@@ -450,7 +465,6 @@ export const OperatorDashboard: React.FC = () => {
             </span>
           </div>
 
-          {/* Pricing Settings Button */}
           <button
             onClick={() => setIsSettingsOpen(true)}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-800 bg-slate-900 hover:bg-slate-800 text-slate-300 transition"
@@ -685,7 +699,7 @@ export const OperatorDashboard: React.FC = () => {
                 })}
               </div>
 
-              {/* Bottom Action Deck with Paper Consumed and Bill Due */}
+              {/* Bottom Action Deck */}
               <div className="absolute bottom-0 left-0 right-0 p-4 border-t flex items-center justify-between z-20 bg-[#0B101D]/90 border-slate-800/80 backdrop-blur-xl">
                 <div className="flex items-center gap-6">
                   <div>
@@ -715,12 +729,19 @@ export const OperatorDashboard: React.FC = () => {
                 </div>
 
                 <div className="flex items-center gap-3">
+                  {/* View & Print in-memory preview button */}
                   <button
-                    onClick={handleDownloadMaster}
-                    className="flex items-center gap-2 px-4 py-2.5 rounded-xl border border-slate-700 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold transition"
+                    onClick={handlePreviewAndPrint}
+                    disabled={isPreviewLoading}
+                    className="flex items-center gap-2 px-4 py-2.5 rounded-xl border border-indigo-700/60 bg-indigo-950/40 hover:bg-indigo-900/60 text-indigo-200 text-xs font-semibold transition shadow-md"
+                    title="Open compiled document in preview tab (Ctrl + P to print)"
                   >
-                    <Download className="w-4 h-4" />
-                    <span>Download Master PDF</span>
+                    {isPreviewLoading ? (
+                      <RefreshCw className="w-4 h-4 animate-spin text-indigo-400" />
+                    ) : (
+                      <FileText className="w-4 h-4 text-indigo-400" />
+                    )}
+                    <span>{isPreviewLoading ? 'Compiling PDF...' : 'View & Print (No Download)'}</span>
                   </button>
 
                   <button
@@ -764,7 +785,7 @@ export const OperatorDashboard: React.FC = () => {
         </main>
       </div>
 
-      {/* Clean 2-Field Pricing Settings Modal */}
+      {/* Pricing Settings Modal */}
       {isSettingsOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
           <div className="w-full max-w-sm bg-[#0E1528] border border-slate-800 rounded-2xl p-6 shadow-2xl">

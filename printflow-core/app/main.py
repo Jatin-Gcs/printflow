@@ -286,6 +286,7 @@ async def ingest_inbound_document(payload: InboundDocumentPayload, bg: Backgroun
 
 @app.get(f"{settings.API_V1_STR}/sessions/{{session_id}}/download")
 async def download_master_pdf(session_id: str):
+    """Compiles and streams the master PDF inline for in-browser tab viewing (zero disk footprint)."""
     session = active_sessions.get(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Customer session not found.")
@@ -308,11 +309,13 @@ async def download_master_pdf(session_id: str):
     try:
         pdf_bytes = parity_engine.generate_inspection_pdf_bytes(manifest)
         filename = f"PrintFlow_{session_id[:8]}.pdf"
+        
+        # 'inline' allows Chrome to preview the PDF directly in a tab; 'attachment' forces a disk download
         return Response(
             content=pdf_bytes,
             media_type="application/pdf",
             headers={
-                "Content-Disposition": f'attachment; filename="{filename}"',
+                "Content-Disposition": f'inline; filename="{filename}"',
                 "Content-Length": str(len(pdf_bytes)),
                 "Access-Control-Expose-Headers": "Content-Disposition"
             }

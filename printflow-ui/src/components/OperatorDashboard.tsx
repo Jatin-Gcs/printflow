@@ -11,7 +11,6 @@ import {
   Sparkles,
   CheckCircle2,
   CheckCheck,
-  Cpu,
   Trash2,
   Settings,
   X,
@@ -49,7 +48,8 @@ interface OperatorDashboardProps {
   onLogout?: () => void;
 }
 
-const LOCAL_BRIDGE_URL = 'https://writing-cooperative-naval-jersey.trycloudflare.com';
+// Local hardware communicator port
+const LOCAL_BRIDGE_URL = 'http://127.0.0.1:9123';
 
 export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = 'default', onLogout }) => {
   const API_BASE = useMemo(() => {
@@ -71,11 +71,13 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
   const [editSimplex, setEditSimplex] = useState('2.00');
   const [editDuplex, setEditDuplex] = useState('3.00');
 
-  const [availablePrinters, setAvailablePrinters] = useState<string[]>([]);
-  const [selectedPrinter, setSelectedPrinter] = useState('');
+  // Printer State (Auto-discovered)
+  const [availablePrinters, setAvailablePrinters] = useState<string[]>(['Microsoft Print to PDF']);
+  const [selectedPrinter, setSelectedPrinter] = useState('Microsoft Print to PDF');
+  const [isBridgeReachable, setIsBridgeReachable] = useState(false);
+
   const [autoPrint, setAutoPrint] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
-  const [isBridgeOnline, setIsBridgeOnline] = useState(false);
   const [isSpooling, setIsSpooling] = useState(false);
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
   const [loadingDocId, setLoadingDocId] = useState<string | null>(null);
@@ -83,24 +85,25 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
   const searchInputRef = useRef<HTMLInputElement>(null);
   const socketRef = useRef<WebSocket | null>(null);
 
-  // Initial Fetch: Printers & Pricing Rates
+  // Poll for connected physical & virtual printers
   useEffect(() => {
     const detectPrinters = async () => {
       try {
-        const bridgeRes = await fetch(`${LOCAL_BRIDGE_URL}/printers`, { signal: AbortSignal.timeout(1500) });
+        const bridgeRes = await fetch(`${LOCAL_BRIDGE_URL}/printers`, { signal: AbortSignal.timeout(1200) });
         if (bridgeRes.ok) {
           const bridgeData = await bridgeRes.json();
           if (bridgeData.printers && bridgeData.printers.length > 0) {
             setAvailablePrinters(bridgeData.printers);
-            setSelectedPrinter(bridgeData.default || bridgeData.printers[0]);
-            setIsBridgeOnline(true);
+            setSelectedPrinter((curr) => (bridgeData.printers.includes(curr) ? curr : (bridgeData.default || bridgeData.printers[0])));
+            setIsBridgeReachable(true);
             return;
           }
         }
       } catch {
-        setIsBridgeOnline(false);
+        setIsBridgeReachable(false);
       }
 
+      // Fallback if local bridge is offline
       try {
         const cloudRes = await fetch(`${API_BASE}/api/v1/printers`);
         const cloudData = await cloudRes.json();
@@ -109,12 +112,13 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
           setSelectedPrinter(cloudData.default || cloudData.printers[0]);
         }
       } catch {
-        setAvailablePrinters(['Default System Printer']);
-        setSelectedPrinter('Default System Printer');
+        setAvailablePrinters(['Microsoft Print to PDF']);
+        setSelectedPrinter('Microsoft Print to PDF');
       }
     };
 
     detectPrinters();
+    const printerPoll = setInterval(detectPrinters, 4000);
 
     fetch(`${API_BASE}/api/v1/settings/pricing?shop_id=${shopId}`)
       .then((res) => res.json())
@@ -133,6 +137,8 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
         }
       })
       .catch(() => {});
+
+    return () => clearInterval(printerPoll);
   }, [API_BASE, shopId]);
 
   // WebSocket Live Stream
@@ -213,21 +219,14 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
     }
 
     try {
-      const res = await fetch(`${API_BASE}/api/v1/gateway/logout?shop_id=${shopId}`, {
+      await fetch(`${API_BASE}/api/v1/gateway/logout?shop_id=${shopId}`, {
         method: 'POST'
       });
-      if (!res.ok) throw new Error('Backend failed to process logout');
-
-      // Clear sessions from state
+    } catch (err) {
+      console.warn('[LOGOUT] Background network notice:', err);
+    } finally {
       setSessions({});
       setSelectedSessionId(null);
-
-      // Instantly switch view back to Pairing without needing page refresh
-      if (onLogout) {
-        onLogout();
-      }
-    } catch (err) {
-      alert(`Logout error: ${err}`);
       if (onLogout) onLogout();
     }
   };
@@ -335,7 +334,7 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
     });
   };
 
-  // View & Print with Auto-Trigger Print Window (Master PDF)
+  // View & Print with In-Memory Preview (Master PDF)
   const handlePreviewAndPrintMaster = async () => {
     if (!activeSession) return;
     setIsPreviewLoading(true);
@@ -346,7 +345,7 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
 
       const blob = await response.blob();
       const blobUrl = URL.createObjectURL(blob);
-      
+
       const previewWindow = window.open(blobUrl, '_blank');
       if (!previewWindow) {
         alert('Popup blocked. Please allow popups for this site to preview documents.');
@@ -360,7 +359,7 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
     }
   };
 
-  // Preview & Print Individual File with Auto-Trigger
+  // Preview & Print Individual File
   const handlePreviewSingleDoc = async (docId: string) => {
     if (!activeSession) return;
     setLoadingDocId(docId);
@@ -371,7 +370,7 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
 
       const blob = await response.blob();
       const blobUrl = URL.createObjectURL(blob);
-      
+
       const previewWindow = window.open(blobUrl, '_blank');
       if (!previewWindow) {
         alert('Popup blocked. Please allow popups for this site to preview documents.');
@@ -385,33 +384,23 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
     }
   };
 
+  // 1-Click Hardware Print Button
   const handlePrintDirect = async () => {
     if (!activeSession) return;
     setIsSpooling(true);
     try {
-      if (isBridgeOnline) {
-        const pdfDownloadUrl = `${API_BASE}/api/v1/sessions/${activeSession.session_id}/download?shop_id=${shopId}`;
-        const res = await fetch(`${LOCAL_BRIDGE_URL}/spool?pdf_url=${encodeURIComponent(pdfDownloadUrl)}&printer_name=${encodeURIComponent(selectedPrinter)}`, {
-          method: 'POST'
-        });
-        if (!res.ok) throw new Error('Local bridge failed to dispatch job to Windows driver.');
-      } else {
-        await fetch(
-          `${API_BASE}/api/v1/sessions/${activeSession.session_id}/dispatch?shop_id=${shopId}`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              action: 'PRINT_DIRECT',
-              target_printer: selectedPrinter,
-              tray_bin: 'Auto',
-              document_overrides: activeSession.documents.map((d) => ({
-                document_id: d.id,
-                print_mode: d.print_mode
-              }))
-            })
-          }
+      const pdfDownloadUrl = `${API_BASE}/api/v1/sessions/${activeSession.session_id}/download?shop_id=${shopId}`;
+
+      if (isBridgeReachable) {
+        // Send directly to the local Windows driver communicator
+        const res = await fetch(
+          `${LOCAL_BRIDGE_URL}/spool?pdf_url=${encodeURIComponent(pdfDownloadUrl)}&printer_name=${encodeURIComponent(selectedPrinter)}`,
+          { method: 'POST' }
         );
+        if (!res.ok) throw new Error('Hardware bridge could not send file to Windows printer queue.');
+      } else {
+        // Fallback: Opens the preview tab so shopkeeper can hit Print directly
+        window.open(pdfDownloadUrl, '_blank');
       }
     } catch (err) {
       alert(`Print error: ${err}`);
@@ -457,25 +446,16 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
               <span className="font-bold tracking-tight text-base flex items-center gap-1.5">
                 PrintFlow <span className="text-[10px] uppercase font-mono px-1.5 py-0.5 bg-indigo-500/20 text-indigo-400 border border-indigo-500/30 rounded">{shopId.slice(0, 8)}</span>
               </span>
-              <div className="flex items-center gap-3 text-xs text-slate-400 mt-0.5">
-                <span className="flex items-center gap-1.5">
-                  <span className={`w-2 h-2 rounded-full ${isConnected ? 'bg-emerald-400 animate-pulse' : 'bg-rose-500'}`} />
-                  {isConnected ? 'WhatsApp Sync Active' : 'Disconnected'}
-                </span>
-                <span className="text-slate-600">•</span>
-                <span className="flex items-center gap-1">
-                  <Cpu className="w-3 h-3 text-slate-500" />
-                  <span className={isBridgeOnline ? 'text-emerald-400 font-mono text-[11px]' : 'text-slate-500 font-mono text-[11px]'}>
-                    {isBridgeOnline ? 'Local Bridge Active' : 'Bridge Offline'}
-                  </span>
-                </span>
+              <div className="flex items-center gap-2 text-xs text-slate-400 mt-0.5">
+                <span className={`w-2 h-2 rounded-full ${isConnected ? 'bg-emerald-400 animate-pulse' : 'bg-rose-500'}`} />
+                <span>{isConnected ? 'WhatsApp Sync Active' : 'Disconnected'}</span>
               </div>
             </div>
           </div>
         </div>
 
         {/* Omnibar Search */}
-        <div className="relative w-72">
+        <div className="relative w-80">
           <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
           <input
             ref={searchInputRef}
@@ -490,14 +470,15 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
           </kbd>
         </div>
 
-        {/* Controls, Pricing Settings & Logout */}
+        {/* Global Controls, Pricing Settings & Logout */}
         <div className="flex items-center gap-3 text-xs font-medium">
+          {/* Hardware Printer Dropdown */}
           <div className="flex items-center gap-2">
-            <span className="text-slate-400">Target Printer:</span>
+            <span className="text-slate-400">Printer:</span>
             <select
               value={selectedPrinter}
               onChange={(e) => setSelectedPrinter(e.target.value)}
-              className="bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500 font-mono"
+              className="bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500 font-mono max-w-[200px] truncate"
             >
               {availablePrinters.map((p) => (
                 <option key={p} value={p}>
@@ -701,7 +682,7 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
                 </div>
               </div>
 
-              {/* Document List with Individual View & Print Actions */}
+              {/* Document List */}
               <div className="flex-1 overflow-y-auto p-6 space-y-3 pb-28">
                 {activeSession.documents.map((doc) => {
                   const isImage = doc.original_filename.match(/\.(jpg|jpeg|png|webp)$/i);
@@ -744,7 +725,6 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
                       </div>
 
                       <div className="flex items-center gap-3">
-                        {/* Individual File Preview & Print Trigger */}
                         <button
                           onClick={() => handlePreviewSingleDoc(doc.id)}
                           disabled={isThisDocLoading}
@@ -759,7 +739,6 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
                           <span>Print File</span>
                         </button>
 
-                        {/* Duplex / Simplex Toggle */}
                         <div className="bg-slate-950 p-1 rounded-xl border border-slate-800 flex items-center">
                           <button
                             onClick={() => handleModeChange(doc.id, 'SIMPLEX')}
@@ -818,7 +797,6 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
                 </div>
 
                 <div className="flex items-center gap-3">
-                  {/* Master PDF View & Print Trigger */}
                   <button
                     onClick={handlePreviewAndPrintMaster}
                     disabled={isPreviewLoading}
@@ -841,7 +819,7 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
                     {isSpooling ? (
                       <>
                         <RefreshCw className="w-4 h-4 animate-spin" />
-                        <span>Spooling via Hardware Bridge...</span>
+                        <span>Spooling to Printer...</span>
                       </>
                     ) : (
                       <>

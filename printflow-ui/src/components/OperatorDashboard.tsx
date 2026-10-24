@@ -48,8 +48,6 @@ interface OperatorDashboardProps {
   onLogout?: () => void;
 }
 
-const LOCAL_BRIDGE_URL = 'http://127.0.0.1:9123';
-
 export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = 'default', onLogout }) => {
   const API_BASE = useMemo(() => {
     return (import.meta as any).env?.VITE_API_URL || `http://${window.location.hostname}:8000`;
@@ -70,11 +68,6 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
   const [editSimplex, setEditSimplex] = useState('2.00');
   const [editDuplex, setEditDuplex] = useState('3.00');
 
-  // Printer Detection State
-  const [availablePrinters, setAvailablePrinters] = useState<string[]>(['Microsoft Print to PDF']);
-  const [selectedPrinter, setSelectedPrinter] = useState('Microsoft Print to PDF');
-
-  const [autoPrint, setAutoPrint] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
   const [loadingDocId, setLoadingDocId] = useState<string | null>(null);
@@ -82,30 +75,8 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
   const searchInputRef = useRef<HTMLInputElement>(null);
   const socketRef = useRef<WebSocket | null>(null);
 
-  // Poll for connected physical & virtual printers
-  // Initial check: single attempt without endless interval spamming
+  // Fetch shop pricing configuration
   useEffect(() => {
-    const detectPrinters = async () => {
-      try {
-        const bridgeRes = await fetch(`${LOCAL_BRIDGE_URL}/printers`, { signal: AbortSignal.timeout(600) });
-        if (bridgeRes.ok) {
-          const bridgeData = await bridgeRes.json();
-          if (bridgeData.printers && bridgeData.printers.length > 0) {
-            setAvailablePrinters(bridgeData.printers);
-            setSelectedPrinter((curr) => (bridgeData.printers.includes(curr) ? curr : (bridgeData.default || bridgeData.printers[0])));
-            return;
-          }
-        }
-      } catch {
-        // Zero-Install mode: Bridge not running locally, silently default to System PDF
-      }
-
-      setAvailablePrinters(['Microsoft Print to PDF']);
-      setSelectedPrinter('Microsoft Print to PDF');
-    };
-
-    detectPrinters();
-
     fetch(`${API_BASE}/api/v1/settings/pricing?shop_id=${shopId}`)
       .then((res) => res.json())
       .then((data) => {
@@ -116,7 +87,7 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
       .catch(() => {});
   }, [API_BASE, shopId]);
 
-  // WebSocket Live Stream
+  // WebSocket Live Stream for instant queue updates
   useEffect(() => {
     const wsUrl = `${WS_BASE}/ws/operator?shop_id=${shopId}`;
     const ws = new WebSocket(wsUrl);
@@ -162,8 +133,6 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
           if (msg.payload.status === 'LOGGED_OUT' || msg.payload.status === 'SCAN_REQUIRED') {
             if (onLogout) onLogout();
           }
-        } else if (msg.event === 'AUTO_PRINT_TOGGLED') {
-          setAutoPrint(msg.payload.auto_print);
         }
       } catch (err) {
         console.error('Socket decoding error:', err);
@@ -173,6 +142,7 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
     return () => ws.close();
   }, [WS_BASE, selectedSessionId, shopId, onLogout]);
 
+  // Keyboard Shortcuts (/ for omnibar search, Escape for handover)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === '/' && document.activeElement !== searchInputRef.current) {
@@ -189,7 +159,7 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
   });
 
   const handleLogoutWhatsApp = async () => {
-    if (!confirm("Disconnect WhatsApp from this counter? Your mobile will unpair and a fresh QR code will be generated.")) {
+    if (!confirm("Disconnect WhatsApp from this counter? A fresh QR code will be generated.")) {
       return;
     }
 
@@ -198,7 +168,7 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
         method: 'POST'
       });
     } catch (err) {
-      console.warn('[LOGOUT] Background network notice:', err);
+      console.warn('[LOGOUT] Network notice:', err);
     } finally {
       setSessions({});
       setSelectedSessionId(null);
@@ -220,19 +190,6 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
       setIsSettingsOpen(false);
     } catch (err) {
       alert(`Failed to save pricing: ${err}`);
-    }
-  };
-
-  const handleToggleAutoPrint = async () => {
-    const nextState = !autoPrint;
-    setAutoPrint(nextState);
-    try {
-      await fetch(
-        `${API_BASE}/api/v1/settings/auto-print?enabled=${nextState}&target_printer=${encodeURIComponent(selectedPrinter)}`,
-        { method: 'POST' }
-      );
-    } catch (err) {
-      console.error('Failed to toggle auto-print:', err);
     }
   };
 
@@ -309,7 +266,7 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
     });
   };
 
-  // Compile Master PDF in memory, open in preview window, and automatically pop the print dialog
+  // Compile Master PDF in memory, open in preview window, and automatically trigger the browser print dialog
   const handlePreviewAndPrintMaster = async () => {
     if (!activeSession) return;
     setIsPreviewLoading(true);
@@ -403,7 +360,7 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
               <Printer className="w-5 h-5 text-white" />
             </div>
             <div>
-              <span className="font-bold tracking-tight text-base flex items-center gap-1.5">
+              <span className="font-bold tracking-tight text-base flex items-center gap-2">
                 PrintFlow <span className="text-[10px] font-mono px-2 py-0.5 bg-indigo-500/20 text-indigo-400 border border-indigo-500/30 rounded">{shopId}</span>
               </span>
               <div className="flex items-center gap-2 text-xs text-slate-400 mt-0.5">
@@ -415,7 +372,7 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
         </div>
 
         {/* Omnibar Search */}
-        <div className="relative w-80">
+        <div className="relative w-96">
           <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
           <input
             ref={searchInputRef}
@@ -423,52 +380,18 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
             placeholder="Search phone or token... (Press /)"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full pl-10 pr-10 py-1.5 rounded-lg text-xs font-mono bg-slate-900 border border-slate-800 focus:border-indigo-500 text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+            className="w-full pl-10 pr-10 py-2 rounded-xl text-xs font-mono bg-slate-900/90 border border-slate-800 focus:border-indigo-500 text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500 transition"
           />
           <kbd className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] font-mono text-slate-400 border border-slate-700/60 rounded px-1.5 py-0.5 bg-slate-800/40">
             /
           </kbd>
         </div>
 
-        {/* Global Controls, Pricing Settings & Logout */}
+        {/* Global Controls & Actions */}
         <div className="flex items-center gap-3 text-xs font-medium">
-          <div className="flex items-center gap-2">
-            <span className="text-slate-400">Printer:</span>
-            <select
-              value={selectedPrinter}
-              onChange={(e) => setSelectedPrinter(e.target.value)}
-              className="bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500 font-mono max-w-[200px] truncate"
-            >
-              {availablePrinters.map((p) => (
-                <option key={p} value={p}>
-                  {p}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800">
-            <span className="text-xs text-slate-300 font-medium">Auto-Print:</span>
-            <button
-              onClick={handleToggleAutoPrint}
-              className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
-                autoPrint ? 'bg-emerald-500' : 'bg-slate-700'
-              }`}
-            >
-              <span
-                className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-lg ring-0 transition duration-200 ease-in-out ${
-                  autoPrint ? 'translate-x-4' : 'translate-x-0'
-                }`}
-              />
-            </button>
-            <span className={`text-[10px] font-mono font-bold ${autoPrint ? 'text-emerald-400' : 'text-slate-500'}`}>
-              {autoPrint ? 'ON' : 'OFF'}
-            </span>
-          </div>
-
           <button
             onClick={() => setIsSettingsOpen(true)}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-800 bg-slate-900 hover:bg-slate-800 text-slate-300 transition"
+            className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-slate-800 bg-slate-900 hover:bg-slate-800 text-slate-300 transition"
             title="Set Price (Single / Double Sided)"
           >
             <Settings className="w-4 h-4 text-indigo-400" />
@@ -477,7 +400,7 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
 
           <button
             onClick={handleLogoutWhatsApp}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-rose-900/60 bg-rose-950/40 hover:bg-rose-900/60 text-rose-300 transition"
+            className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-rose-900/60 bg-rose-950/40 hover:bg-rose-900/60 text-rose-300 transition"
             title="Unlink WhatsApp from this counter and reset QR"
           >
             <LogOut className="w-3.5 h-3.5 text-rose-400" />

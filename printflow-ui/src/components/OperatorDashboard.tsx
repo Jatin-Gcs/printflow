@@ -48,7 +48,6 @@ interface OperatorDashboardProps {
   onLogout?: () => void;
 }
 
-// Local hardware communicator port
 const LOCAL_BRIDGE_URL = 'http://127.0.0.1:9123';
 
 export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = 'default', onLogout }) => {
@@ -71,14 +70,12 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
   const [editSimplex, setEditSimplex] = useState('2.00');
   const [editDuplex, setEditDuplex] = useState('3.00');
 
-  // Printer State (Auto-discovered)
+  // Printer Detection State
   const [availablePrinters, setAvailablePrinters] = useState<string[]>(['Microsoft Print to PDF']);
   const [selectedPrinter, setSelectedPrinter] = useState('Microsoft Print to PDF');
-  const [isBridgeReachable, setIsBridgeReachable] = useState(false);
 
   const [autoPrint, setAutoPrint] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
-  const [isSpooling, setIsSpooling] = useState(false);
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
   const [loadingDocId, setLoadingDocId] = useState<string | null>(null);
 
@@ -95,15 +92,13 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
           if (bridgeData.printers && bridgeData.printers.length > 0) {
             setAvailablePrinters(bridgeData.printers);
             setSelectedPrinter((curr) => (bridgeData.printers.includes(curr) ? curr : (bridgeData.default || bridgeData.printers[0])));
-            setIsBridgeReachable(true);
             return;
           }
         }
       } catch {
-        setIsBridgeReachable(false);
+        // Local bridge not running on this machine; fallback to cloud endpoint or virtual default
       }
 
-      // Fallback if local bridge is offline
       try {
         const cloudRes = await fetch(`${API_BASE}/api/v1/printers`);
         const cloudData = await cloudRes.json();
@@ -334,7 +329,7 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
     });
   };
 
-  // View & Print with In-Memory Preview (Master PDF)
+  // Compile Master PDF in memory, open in preview window, and automatically pop the print dialog
   const handlePreviewAndPrintMaster = async () => {
     if (!activeSession) return;
     setIsPreviewLoading(true);
@@ -349,6 +344,11 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
       const previewWindow = window.open(blobUrl, '_blank');
       if (!previewWindow) {
         alert('Popup blocked. Please allow popups for this site to preview documents.');
+      } else {
+        previewWindow.onload = () => {
+          previewWindow.focus();
+          previewWindow.print();
+        };
       }
 
       setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
@@ -374,6 +374,11 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
       const previewWindow = window.open(blobUrl, '_blank');
       if (!previewWindow) {
         alert('Popup blocked. Please allow popups for this site to preview documents.');
+      } else {
+        previewWindow.onload = () => {
+          previewWindow.focus();
+          previewWindow.print();
+        };
       }
 
       setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
@@ -381,31 +386,6 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
       alert(`Document view error: ${err}`);
     } finally {
       setLoadingDocId(null);
-    }
-  };
-
-  // 1-Click Hardware Print Button
-  const handlePrintDirect = async () => {
-    if (!activeSession) return;
-    setIsSpooling(true);
-    try {
-      const pdfDownloadUrl = `${API_BASE}/api/v1/sessions/${activeSession.session_id}/download?shop_id=${shopId}`;
-
-      if (isBridgeReachable) {
-        // Send directly to the local Windows driver communicator
-        const res = await fetch(
-          `${LOCAL_BRIDGE_URL}/spool?pdf_url=${encodeURIComponent(pdfDownloadUrl)}&printer_name=${encodeURIComponent(selectedPrinter)}`,
-          { method: 'POST' }
-        );
-        if (!res.ok) throw new Error('Hardware bridge could not send file to Windows printer queue.');
-      } else {
-        // Fallback: Opens the preview tab so shopkeeper can hit Print directly
-        window.open(pdfDownloadUrl, '_blank');
-      }
-    } catch (err) {
-      alert(`Print error: ${err}`);
-    } finally {
-      setTimeout(() => setIsSpooling(false), 800);
     }
   };
 
@@ -472,7 +452,6 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
 
         {/* Global Controls, Pricing Settings & Logout */}
         <div className="flex items-center gap-3 text-xs font-medium">
-          {/* Hardware Printer Dropdown */}
           <div className="flex items-center gap-2">
             <span className="text-slate-400">Printer:</span>
             <select
@@ -797,34 +776,22 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
                 </div>
 
                 <div className="flex items-center gap-3">
+                  {/* Single Unified Master Print Button */}
                   <button
                     onClick={handlePreviewAndPrintMaster}
                     disabled={isPreviewLoading}
-                    className="flex items-center gap-2 px-4 py-2.5 rounded-xl border border-indigo-700/60 bg-indigo-950/40 hover:bg-indigo-900/60 text-indigo-200 text-xs font-semibold transition shadow-md"
-                    title="View & Print combined batch"
+                    className="flex items-center gap-2 px-6 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:bg-emerald-900 disabled:cursor-not-allowed text-white text-xs font-bold shadow-lg shadow-emerald-950/60 border border-emerald-400/30 transition-all active:scale-95"
+                    title="Open compiled document with instant print dialog"
                   >
                     {isPreviewLoading ? (
-                      <RefreshCw className="w-4 h-4 animate-spin text-indigo-400" />
-                    ) : (
-                      <FileText className="w-4 h-4 text-indigo-400" />
-                    )}
-                    <span>{isPreviewLoading ? 'Compiling PDF...' : 'Print Master PDF'}</span>
-                  </button>
-
-                  <button
-                    onClick={handlePrintDirect}
-                    disabled={isSpooling || activeSession.status === 'SPOOLING'}
-                    className="flex items-center gap-2 px-6 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:bg-emerald-900 disabled:cursor-not-allowed text-white text-xs font-bold shadow-lg shadow-emerald-950/60 border border-emerald-400/30 transition-all active:scale-95"
-                  >
-                    {isSpooling ? (
                       <>
                         <RefreshCw className="w-4 h-4 animate-spin" />
-                        <span>Spooling to Printer...</span>
+                        <span>Compiling Master PDF...</span>
                       </>
                     ) : (
                       <>
                         <Printer className="w-4 h-4" />
-                        <span>Print Now</span>
+                        <span>Print Master PDF</span>
                       </>
                     )}
                   </button>
@@ -836,7 +803,7 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
                       title="Handover order and clear card (Esc)"
                     >
                       <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                      <span>Handover</span>
+                      <span>Handover (Esc)</span>
                     </button>
                   )}
                 </div>

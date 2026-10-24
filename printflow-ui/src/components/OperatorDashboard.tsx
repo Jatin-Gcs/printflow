@@ -389,7 +389,7 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
     }`}>
       
       {/* Top Navbar */}
-      <header className={`h-16 px-6 border-b flex items-center justify-between shrink-0 transition-colors duration-200 ${
+      <header className={`relative z-50 h-16 px-6 border-b flex items-center justify-between shrink-0 transition-colors duration-200 ${
         isDark 
           ? 'bg-[#0B101D]/90 border-slate-800/80 backdrop-blur-md' 
           : 'bg-white/90 border-slate-200/90 shadow-sm backdrop-blur-md'
@@ -495,7 +495,7 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
             </button>
 
             {isProfileOpen && (
-              <div className={`absolute right-0 mt-2 w-64 rounded-2xl border p-2 shadow-2xl z-50 animate-in fade-in slide-in-from-top-2 duration-150 ${
+              <div className={`absolute right-0 mt-2 w-64 rounded-2xl border p-2 shadow-2xl z-[100] animate-in fade-in slide-in-from-top-2 duration-150 ${
                 isDark 
                   ? 'bg-[#0E1528] border-slate-800 text-slate-200 shadow-black/80' 
                   : 'bg-white border-slate-200 text-slate-800 shadow-slate-300/60'

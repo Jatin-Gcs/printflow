@@ -83,10 +83,11 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
   const socketRef = useRef<WebSocket | null>(null);
 
   // Poll for connected physical & virtual printers
+  // Initial check: single attempt without endless interval spamming
   useEffect(() => {
     const detectPrinters = async () => {
       try {
-        const bridgeRes = await fetch(`${LOCAL_BRIDGE_URL}/printers`, { signal: AbortSignal.timeout(1200) });
+        const bridgeRes = await fetch(`${LOCAL_BRIDGE_URL}/printers`, { signal: AbortSignal.timeout(600) });
         if (bridgeRes.ok) {
           const bridgeData = await bridgeRes.json();
           if (bridgeData.printers && bridgeData.printers.length > 0) {
@@ -96,24 +97,14 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
           }
         }
       } catch {
-        // Local bridge not running on this machine; fallback to cloud endpoint or virtual default
+        // Zero-Install mode: Bridge not running locally, silently default to System PDF
       }
 
-      try {
-        const cloudRes = await fetch(`${API_BASE}/api/v1/printers`);
-        const cloudData = await cloudRes.json();
-        if (cloudData.printers && cloudData.printers.length > 0) {
-          setAvailablePrinters(cloudData.printers);
-          setSelectedPrinter(cloudData.default || cloudData.printers[0]);
-        }
-      } catch {
-        setAvailablePrinters(['Microsoft Print to PDF']);
-        setSelectedPrinter('Microsoft Print to PDF');
-      }
+      setAvailablePrinters(['Microsoft Print to PDF']);
+      setSelectedPrinter('Microsoft Print to PDF');
     };
 
     detectPrinters();
-    const printerPoll = setInterval(detectPrinters, 4000);
 
     fetch(`${API_BASE}/api/v1/settings/pricing?shop_id=${shopId}`)
       .then((res) => res.json())
@@ -123,17 +114,6 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
         setEditDuplex(data.rate_duplex.toFixed(2));
       })
       .catch(() => {});
-
-    fetch(`${API_BASE}/api/v1/settings/auto-print`)
-      .then((res) => res.json())
-      .then((data) => {
-        if (typeof data.auto_print === 'boolean') {
-          setAutoPrint(data.auto_print);
-        }
-      })
-      .catch(() => {});
-
-    return () => clearInterval(printerPoll);
   }, [API_BASE, shopId]);
 
   // WebSocket Live Stream
@@ -424,7 +404,7 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
             </div>
             <div>
               <span className="font-bold tracking-tight text-base flex items-center gap-1.5">
-                PrintFlow <span className="text-[10px] uppercase font-mono px-1.5 py-0.5 bg-indigo-500/20 text-indigo-400 border border-indigo-500/30 rounded">{shopId.slice(0, 8)}</span>
+                PrintFlow <span className="text-[10px] font-mono px-2 py-0.5 bg-indigo-500/20 text-indigo-400 border border-indigo-500/30 rounded">{shopId}</span>
               </span>
               <div className="flex items-center gap-2 text-xs text-slate-400 mt-0.5">
                 <span className={`w-2 h-2 rounded-full ${isConnected ? 'bg-emerald-400 animate-pulse' : 'bg-rose-500'}`} />

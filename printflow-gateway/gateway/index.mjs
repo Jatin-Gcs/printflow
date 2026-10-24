@@ -18,13 +18,27 @@ const FASTAPI_QR_ENDPOINT = process.env.QR_ENDPOINT || 'http://127.0.0.1:8000/ap
 const AUTH_BASE_DIR = path.resolve('auth_info_baileys');
 const GATEWAY_PORT = process.env.GATEWAY_PORT || 3001;
 
+// Use a Set so .has() works, and include all presentation + office mime variations
 const ALLOWED_MIME_TYPES = new Set([
   'application/pdf',
   'image/jpeg',
   'image/png',
   'image/webp',
+  'image/bmp',
+  'image/tiff',
+  'application/msword',
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-  'application/msword'
+  'application/vnd.ms-powerpoint',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  'application/vnd.openxmlformats-officedocument.presentationml.slideshow',
+  'application/vnd.oasis.opendocument.presentation',
+  'application/vnd.oasis.opendocument.text'
+]);
+
+const ALLOWED_EXTENSIONS = new Set([
+  '.pdf', '.jpg', '.jpeg', '.png', '.webp', '.bmp', '.tiff',
+  '.doc', '.docx', '.odt', '.rtf',
+  '.ppt', '.pptx', '.odp', '.pps', '.ppsx'
 ]);
 
 const activeSockets = new Map();
@@ -178,7 +192,17 @@ async function getOrInitSocket(shopId = 'default') {
       const rawMime = (media.mimetype || '').split(';')[0].toLowerCase();
       const detectedMime = rawMime || (mediaType === 'imageMessage' ? 'image/jpeg' : 'application/pdf');
 
-      if (!ALLOWED_MIME_TYPES.has(detectedMime)) continue;
+      // Check filename extension as fallback if WhatsApp sends generic application/octet-stream
+      const originalFileName = media.fileName || '';
+      const fileExt = path.extname(originalFileName).toLowerCase();
+
+      const isAllowedMime = ALLOWED_MIME_TYPES.has(detectedMime);
+      const isAllowedExt = ALLOWED_EXTENSIONS.has(fileExt);
+
+      if (!isAllowedMime && !isAllowedExt) {
+        console.log(`[GATEWAY:${shopId}] Ignored unsupported file format: mime=${detectedMime}, ext=${fileExt}`);
+        continue;
+      }
 
       const customerPhone = extractPhoneNumber(msg);
 
@@ -208,7 +232,7 @@ async function getOrInitSocket(shopId = 'default') {
         const destinationPath = path.join(customerDir, `${Date.now()}_${originalFilename}`);
         fs.writeFileSync(destinationPath, buffer);
 
-        console.log(`[GATEWAY:${shopId}] Ingested file "${originalFilename}" from ${customerPhone}`);
+        console.log(`[GATEWAY:${shopId}] Ingested presentation/document "${originalFilename}" from ${customerPhone}`);
 
         await axios.post(FASTAPI_ENDPOINT, {
           shop_id: shopId,
@@ -251,7 +275,6 @@ server.post('/api/gateway/logout', async (req, res) => {
 
   const sock = activeSockets.get(shopId);
 
-  // 1. Send logout signal to WhatsApp servers to unpair the phone
   if (sock) {
     try {
       await sock.logout();
@@ -264,7 +287,6 @@ server.post('/api/gateway/logout', async (req, res) => {
     activeSockets.delete(shopId);
   }
 
-  // 2. Wipe the session credentials directory completely
   const shopAuthFolder = path.join(AUTH_BASE_DIR, shopId);
   if (fs.existsSync(shopAuthFolder)) {
     try {
@@ -275,14 +297,12 @@ server.post('/api/gateway/logout', async (req, res) => {
     }
   }
 
-  // 3. Inform FastAPI to notify all dashboard sockets
   await axios.post(FASTAPI_QR_ENDPOINT, {
     shop_id: shopId,
     status: 'LOGGED_OUT',
     qr_image: null
   }).catch(() => {});
 
-  // 4. Automatically boot a fresh socket instance to present a new pairing QR
   setTimeout(() => {
     getOrInitSocket(shopId);
   }, 1000);

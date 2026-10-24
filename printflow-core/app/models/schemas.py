@@ -14,12 +14,13 @@ class SessionStatus(str, Enum):
     PURGED = "PURGED"
 
 class InboundDocumentPayload(BaseModel):
+    shop_id: str = "default"
     customer_phone: str
     message_id: str
     file_path: str
     original_filename: str
     mime_type: str
-    file_size: int
+    file_size: int = 0
     timestamp: float
 
 class DocumentMetadata(BaseModel):
@@ -28,6 +29,7 @@ class DocumentMetadata(BaseModel):
     normalized_path: str
     page_count: int
     print_mode: PrintMode
+    copies: int = 1
     is_encrypted: bool = False
     is_corrupted: bool = False
 

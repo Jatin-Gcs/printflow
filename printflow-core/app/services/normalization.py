@@ -48,11 +48,18 @@ def normalize_raster_to_a4(source_image_path: Path, output_pdf_path: Path) -> in
 
 def convert_office_to_pdf(source_office_path: Path, output_dir: Path) -> Path:
     """
-    Converts DOCX/ODT files to PDF using process-isolated headless LibreOffice.
-    Avoids profile lock contentions (exit code 1) by pointing -env:UserInstallation to an isolated temp URI.
+    Converts DOCX/DOC/ODT and PPTX/PPT/ODP files to PDF using process-isolated headless LibreOffice.
+    Selects the optimal export filter (Writer for documents, Impress for slides) and avoids
+    profile lock contentions by pointing -env:UserInstallation to an isolated temp URI.
     """
     if not source_office_path.exists():
         raise FileNotFoundError(f"Source office file missing: {source_office_path}")
+
+    ext = source_office_path.suffix.lower()
+    is_presentation = ext in [".ppt", ".pptx", ".odp"]
+
+    # Select appropriate filter
+    pdf_filter = "impress_pdf_Export" if is_presentation else "writer_pdf_Export"
 
     instance_id = uuid.uuid4().hex
     temp_profile_dir = Path(tempfile.gettempdir()) / f"lo_profile_{instance_id}"
@@ -68,7 +75,7 @@ def convert_office_to_pdf(source_office_path: Path, output_dir: Path) -> Path:
         "--nologo",
         "--norestore",
         f"-env:UserInstallation={temp_profile_uri}",
-        "--convert-to", "pdf:writer_pdf_Export",
+        "--convert-to", f"pdf:{pdf_filter}",
         "--outdir", str(output_dir),
         str(source_office_path)
     ]
@@ -105,14 +112,26 @@ def normalize_pdf_document(source_pdf_path: Path, output_pdf_path: Path) -> Tupl
     return page_count, False
 
 def normalize_any_document(source_path: Path, output_pdf_path: Path) -> Tuple[int, bool, bool]:
-    """Unified entry point for document normalization."""
+    """Unified entry point for document normalization (Images, PDFs, Docs, PPT/PPTX)."""
     ext = source_path.suffix.lower()
     try:
         if ext in [".jpg", ".jpeg", ".png", ".webp", ".tiff", ".bmp"]:
             pages = normalize_raster_to_a4(source_path, output_pdf_path)
             return pages, False, False
 
+        # Word & Document formats
         elif ext in [".docx", ".doc", ".odt", ".rtf"]:
+            temp_output_dir = output_pdf_path.parent
+            intermediate_pdf = convert_office_to_pdf(source_path, temp_output_dir)
+            if intermediate_pdf != output_pdf_path:
+                shutil.move(str(intermediate_pdf), str(output_pdf_path))
+            d = pymupdf.open(output_pdf_path)
+            pages = d.page_count
+            d.close()
+            return pages, False, False
+
+        # PowerPoint & Presentation slide formats
+        elif ext in [".pptx", ".ppt", ".odp"]:
             temp_output_dir = output_pdf_path.parent
             intermediate_pdf = convert_office_to_pdf(source_path, temp_output_dir)
             if intermediate_pdf != output_pdf_path:

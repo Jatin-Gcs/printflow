@@ -25,69 +25,80 @@ export const PairingScreen: React.FC<PairingScreenProps> = ({ shopId, onPaired }
   const [qrImage, setQrImage] = useState<string | null>(null);
   const [timeLeft, setTimeLeft] = useState<number>(20);
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
+
+  // Store the active QR code string in a ref to avoid resetting timer on duplicate poll results
+  const currentQrRef = useRef<string | null>(null);
   const pollIntervalRef = useRef<any>(null);
 
-  // 1. Snapshot and Status Fetcher
-  const fetchStatus = async () => {
+  const applyNewQr = (newQr: string) => {
+    if (newQr && newQr !== currentQrRef.current) {
+      currentQrRef.current = newQr;
+      setQrImage(newQr);
+      setTimeLeft(20); // Only reset when an actual new QR string arrives
+    }
+  };
+
+  const fetchStatus = async (isManual = false) => {
+    if (isManual) setIsRefreshing(true);
     try {
       const res = await fetch(`${API_BASE}/api/v1/gateway/status?shop_id=${shopId}`);
       const data = await res.json();
       setGatewayStatus(data.status);
 
-      if (data.qr_image && data.qr_image !== qrImage) {
-        setQrImage(data.qr_image);
-        setTimeLeft(20);
-      }
       if (data.status === 'CONNECTED') {
         onPaired();
+        return;
+      }
+
+      if (data.qr_image) {
+        applyNewQr(data.qr_image);
       }
     } catch {
       setGatewayStatus('DISCONNECTED');
     } finally {
-      setIsRefreshing(false);
+      if (isManual) setIsRefreshing(false);
     }
   };
 
-  // Explicit Reload Trigger when QR expires
   const handleManualRefresh = () => {
-    setIsRefreshing(true);
-    fetchStatus();
+    // Force reset current QR ref so fresh fetch will re-arm timer
+    currentQrRef.current = null;
+    fetchStatus(true);
   };
 
   useEffect(() => {
+    // Initial fetch
     fetchStatus();
 
-    // 2. Poll every 2 seconds while pairing (guarantees auto-redirect even if WS drops)
-    pollIntervalRef.current = setInterval(fetchStatus, 2000);
+    // Poll status every 4 seconds (instead of 2) for resilience, without resetting timer
+    pollIntervalRef.current = setInterval(() => {
+      fetchStatus(false);
+    }, 4000);
 
-    // 3. WebSocket listener for instant zero-lag updates
+    // WebSocket listener for instant zero-lag updates
     const wsUrl = `${WS_BASE}/ws/operator?shop_id=${shopId}`;
     const ws = new WebSocket(wsUrl);
 
     ws.onmessage = (event) => {
       try {
         const msg = JSON.parse(event.data);
-        
-        // Handle initial snapshot
+
         if (msg.event === 'INITIAL_SNAPSHOT') {
           const status = msg.gateway_state?.status;
           if (status) setGatewayStatus(status);
-          if (msg.gateway_state?.qr_image) {
-            setQrImage(msg.gateway_state.qr_image);
-            setTimeLeft(20);
-          }
           if (status === 'CONNECTED') onPaired();
+          if (msg.gateway_state?.qr_image) {
+            applyNewQr(msg.gateway_state.qr_image);
+          }
         }
 
-        // Handle live QR or connection updates
         if (msg.event === `GATEWAY_STATUS_UPDATED:${shopId}`) {
           const status = msg.payload?.status;
           if (status) setGatewayStatus(status);
-          if (msg.payload?.qr_image) {
-            setQrImage(msg.payload.qr_image);
-            setTimeLeft(20);
-          }
           if (status === 'CONNECTED') onPaired();
+          if (msg.payload?.qr_image) {
+            applyNewQr(msg.payload.qr_image);
+          }
         }
       } catch (err) {
         console.error('Error handling pairing event:', err);
@@ -100,12 +111,17 @@ export const PairingScreen: React.FC<PairingScreenProps> = ({ shopId, onPaired }
     };
   }, [API_BASE, WS_BASE, shopId, onPaired]);
 
-  // 4. 20-second circular countdown timer for WhatsApp Web lifecycle
+  // Dedicated 1-second countdown interval (decoupled from network calls)
   useEffect(() => {
     if (gatewayStatus === 'CONNECTED' || !qrImage) return;
+
     const timer = setInterval(() => {
-      setTimeLeft((prev) => (prev > 0 ? prev - 1 : 0));
+      setTimeLeft((prev) => {
+        if (prev <= 1) return 0;
+        return prev - 1;
+      });
     }, 1000);
+
     return () => clearInterval(timer);
   }, [gatewayStatus, qrImage]);
 

@@ -21,7 +21,11 @@ import {
   ChevronDown,
   User,
   ShieldCheck,
-  ExternalLink
+  ExternalLink,
+  Plus,
+  Minus,
+  Download,
+  Zap
 } from 'lucide-react';
 
 interface DocumentMetadata {
@@ -30,6 +34,7 @@ interface DocumentMetadata {
   normalized_path: string;
   page_count: number;
   print_mode: 'SIMPLEX' | 'DUPLEX';
+  copies?: number;
   is_encrypted: boolean;
   is_corrupted: boolean;
 }
@@ -91,7 +96,6 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
 
   // In-App Lightbox State
   const [lightboxDoc, setLightboxDoc] = useState<{ id: string; filename: string; blobUrl: string } | null>(null);
-  const [isLightboxLoading, setIsLightboxLoading] = useState(false);
 
   const [isConnected, setIsConnected] = useState(false);
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
@@ -100,7 +104,6 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
   const profileMenuRef = useRef<HTMLDivElement>(null);
   const socketRef = useRef<WebSocket | null>(null);
 
-  // Close profile dropdown on outside click
   useEffect(() => {
     const handleOutsideClick = (e: MouseEvent) => {
       if (profileMenuRef.current && !profileMenuRef.current.contains(e.target as Node)) {
@@ -111,7 +114,6 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
     return () => document.removeEventListener('mousedown', handleOutsideClick);
   }, []);
 
-  // Fetch shop pricing configuration
   useEffect(() => {
     fetch(`${API_BASE}/api/v1/settings/pricing?shop_id=${shopId}`)
       .then((res) => res.json())
@@ -123,7 +125,6 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
       .catch(() => {});
   }, [API_BASE, shopId]);
 
-  // WebSocket Live Stream for queue updates
   useEffect(() => {
     const wsUrl = `${WS_BASE}/ws/operator?shop_id=${shopId}`;
     const ws = new WebSocket(wsUrl);
@@ -138,6 +139,8 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
         if (msg.event === 'INITIAL_SNAPSHOT') {
           const map: Record<string, SessionState> = {};
           msg.payload.forEach((s: SessionState) => {
+            // Guarantee default copies = 1 for legacy or unannotated sessions
+            s.documents = s.documents.map((d) => ({ ...d, copies: d.copies || 1 }));
             map[s.session_id] = s;
           });
           setSessions(map);
@@ -151,6 +154,7 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
           }
         } else if (msg.event === `SESSION_UPDATED:${shopId}`) {
           const updated: SessionState = msg.payload;
+          updated.documents = updated.documents.map((d) => ({ ...d, copies: d.copies || 1 }));
           setSessions((prev) => ({ ...prev, [updated.session_id]: updated }));
           setSelectedSessionId((curr) => curr || updated.session_id);
         } else if (msg.event === `SESSION_PURGED:${shopId}`) {
@@ -177,29 +181,6 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
 
     return () => ws.close();
   }, [WS_BASE, selectedSessionId, shopId, onLogout]);
-
-  // Keyboard Shortcuts (/ for search, Escape for Lightbox/Handover)
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        if (lightboxDoc) {
-          e.preventDefault();
-          closeLightbox();
-          return;
-        }
-        if (activeSession && !isSettingsOpen && !isProfileOpen) {
-          e.preventDefault();
-          handleCompleteSession(activeSession.session_id);
-        }
-      }
-      if (e.key === '/' && document.activeElement !== searchInputRef.current) {
-        e.preventDefault();
-        searchInputRef.current?.focus();
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  });
 
   const handleLogoutWhatsApp = async () => {
     setIsProfileOpen(false);
@@ -290,6 +271,7 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
     ? sessions[selectedSessionId]
     : displayedList[0] || null;
 
+  // Single / Double Sided Toggles
   const handleModeChange = (docId: string, mode: 'SIMPLEX' | 'DUPLEX') => {
     if (!activeSession) return;
     setSessions((prev) => {
@@ -306,6 +288,22 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
       const s = prev[activeSession.session_id];
       if (!s) return prev;
       const updatedDocs = s.documents.map((d) => ({ ...d, print_mode: mode }));
+      return { ...prev, [s.session_id]: { ...s, documents: updatedDocs } };
+    });
+  };
+
+  // Tactile Copy Multiplier Stepper
+  const handleCopyChange = (docId: string, delta: number) => {
+    if (!activeSession) return;
+    setSessions((prev) => {
+      const s = prev[activeSession.session_id];
+      if (!s) return prev;
+      const updatedDocs = s.documents.map((d) => {
+        if (d.id !== docId) return d;
+        const currentCopies = d.copies || 1;
+        const nextCopies = Math.max(1, Math.min(99, currentCopies + delta));
+        return { ...d, copies: nextCopies };
+      });
       return { ...prev, [s.session_id]: { ...s, documents: updatedDocs } };
     });
   };
@@ -340,10 +338,70 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
     }
   };
 
-  // Open In-App Lightbox Preview (No tab switching needed)
+  // Alt + D Download Action
+  const handleDirectDownloadMaster = async () => {
+    if (!activeSession) return;
+    try {
+      const url = `${API_BASE}/api/v1/sessions/${activeSession.session_id}/download?shop_id=${shopId}`;
+      const response = await fetch(url);
+      if (!response.ok) throw new Error('Failed to fetch master PDF.');
+      const blob = await response.blob();
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = `PrintFlow_${activeSession.customer_phone.replace(/[^0-9]/g, '') || 'docs'}.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } catch (err) {
+      alert(`Download failed: ${err}`);
+    }
+  };
+
+  // Global Keyboard Shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Escape for Lightbox or Handover
+      if (e.key === 'Escape') {
+        if (lightboxDoc) {
+          e.preventDefault();
+          closeLightbox();
+          return;
+        }
+        if (activeSession && !isSettingsOpen && !isProfileOpen) {
+          e.preventDefault();
+          handleCompleteSession(activeSession.session_id);
+        }
+      }
+
+      // '/' to focus search
+      if (e.key === '/' && document.activeElement !== searchInputRef.current) {
+        e.preventDefault();
+        searchInputRef.current?.focus();
+      }
+
+      // Alt + D to download compiled Master PDF
+      if (e.altKey && (e.key === 'd' || e.key === 'D')) {
+        e.preventDefault();
+        handleDirectDownloadMaster();
+      }
+
+      // Enter to trigger primary Master Print (when not typing in an input field)
+      if (e.key === 'Enter' && activeSession && !lightboxDoc && !isSettingsOpen && !isProfileOpen) {
+        const tagName = (document.activeElement?.tagName || '').toLowerCase();
+        if (tagName !== 'input' && tagName !== 'textarea') {
+          e.preventDefault();
+          handlePreviewAndPrintMaster();
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  });
+
+  // Open In-App Lightbox Preview
   const openLightbox = async (doc: DocumentMetadata) => {
     if (!activeSession) return;
-    setIsLightboxLoading(true);
     try {
       const url = `${API_BASE}/api/v1/sessions/${activeSession.session_id}/documents/${doc.id}/preview?shop_id=${shopId}`;
       const response = await fetch(url);
@@ -354,8 +412,6 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
       setLightboxDoc({ id: doc.id, filename: doc.original_filename, blobUrl });
     } catch (err) {
       alert(`Lightbox error: ${err}`);
-    } finally {
-      setIsLightboxLoading(false);
     }
   };
 
@@ -366,7 +422,7 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
     setLightboxDoc(null);
   };
 
-  // Live Sheet Count & Dynamic Bill Calculation
+  // Live Sheet Count & Dynamic Bill Calculation with Copy Multiplier
   const sheetSummary = useMemo(() => {
     if (!activeSession) return { singleCount: 0, doubleSheets: 0, totalSheets: 0, estimatedCost: 0 };
     let singleCount = 0;
@@ -374,11 +430,12 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
 
     activeSession.documents.forEach((d) => {
       if (d.is_corrupted) return;
+      const copies = d.copies || 1;
       if (d.print_mode === 'SIMPLEX') {
-        singleCount += d.page_count;
+        singleCount += d.page_count * copies;
       } else {
-        const padded = d.page_count + (d.page_count % 2 !== 0 ? 1 : 0);
-        doublePages += padded;
+        const paddedPerPage = d.page_count + (d.page_count % 2 !== 0 ? 1 : 0);
+        doublePages += paddedPerPage * copies;
       }
     });
 
@@ -394,7 +451,7 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
       isDark ? 'bg-[#070A11] text-slate-100' : 'bg-[#F8FAFC] text-slate-900'
     }`}>
       
-      {/* Top Navbar with elevated stacking context */}
+      {/* Top Navbar */}
       <header className={`relative z-50 h-16 px-6 border-b flex items-center justify-between shrink-0 transition-colors duration-200 ${
         isDark 
           ? 'bg-[#0B101D]/90 border-slate-800/80 backdrop-blur-md' 
@@ -701,7 +758,7 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
                     )}
                   </div>
                   <p className={`text-xs mt-0.5 ${isDark ? 'text-slate-300' : 'text-slate-500 font-medium'}`}>
-                    {activeSession.documents.length} file(s) staged • Click thumbnail to inspect preview
+                    {activeSession.documents.length} file(s) staged • Press <strong>Enter</strong> to Print All, <strong>Alt+D</strong> to Download
                   </p>
                 </div>
 
@@ -714,7 +771,7 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
                         : 'border-slate-300 bg-white hover:bg-slate-100 text-slate-700 shadow-sm'
                     }`}
                   >
-                    All Single-Sided
+                    All 1-Sided
                   </button>
                   <button
                     onClick={() => handleGlobalModeOverride('DUPLEX')}
@@ -724,7 +781,7 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
                         : 'border-slate-300 bg-white hover:bg-slate-100 text-slate-700 shadow-sm'
                     }`}
                   >
-                    All Double-Sided
+                    All 2-Sided
                   </button>
 
                   {activeSession.status !== 'COMPLETED' && (
@@ -740,16 +797,17 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
                 </div>
               </div>
 
-              {/* Document List with Micro-Thumbnails and Cleaned Rows */}
-              <div className="flex-1 overflow-y-auto p-6 space-y-3 pb-28">
+              {/* Document List with Tactile Copies Stepper & Explicit Icons */}
+              <div className="flex-1 overflow-y-auto p-6 space-y-3 pb-32">
                 {activeSession.documents.map((doc) => {
                   const isImage = doc.original_filename.match(/\.(jpg|jpeg|png|webp)$/i);
                   const isOddDouble = doc.print_mode === 'DUPLEX' && doc.page_count % 2 !== 0;
+                  const docCopies = doc.copies || 1;
 
                   return (
                     <div
                       key={doc.id}
-                      className={`p-3.5 rounded-xl border flex items-center justify-between transition-colors ${
+                      className={`p-4 rounded-xl border flex items-center justify-between transition-colors ${
                         isDark 
                           ? 'bg-[#0E1528] border-slate-800/90 hover:border-slate-700' 
                           : 'bg-white border-slate-200 hover:border-slate-300 shadow-sm'
@@ -779,7 +837,6 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
                             {doc.page_count}P
                           </span>
 
-                          {/* Hover Overlay Eye Icon */}
                           <div className="absolute inset-0 bg-indigo-600/70 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
                             <Eye className="w-4 h-4" />
                           </div>
@@ -814,30 +871,68 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
                         </div>
                       </div>
 
-                      {/* Tactile Single / Double Sided Segmented Switch */}
-                      <div className="flex items-center gap-3">
+                      {/* Controls: Copies Stepper + Explicit Segmented Mode */}
+                      <div className="flex items-center gap-4">
+                        {/* Per-Document Copies Stepper [-] [ 1 ] [+] */}
+                        <div className="flex items-center gap-1.5">
+                          <span className={`text-xs font-bold uppercase tracking-wider mr-1 ${
+                            isDark ? 'text-slate-400' : 'text-slate-500'
+                          }`}>
+                            Copies:
+                          </span>
+                          <div className={`flex items-center rounded-xl border p-0.5 ${
+                            isDark ? 'bg-slate-950 border-slate-800' : 'bg-slate-100 border-slate-300'
+                          }`}>
+                            <button
+                              onClick={() => handleCopyChange(doc.id, -1)}
+                              disabled={docCopies <= 1}
+                              className={`w-7 h-7 flex items-center justify-center rounded-lg transition disabled:opacity-40 disabled:cursor-not-allowed ${
+                                isDark ? 'hover:bg-slate-800 text-slate-300' : 'hover:bg-slate-200 text-slate-700'
+                              }`}
+                              title="Decrease copies"
+                            >
+                              <Minus className="w-3.5 h-3.5" />
+                            </button>
+                            <span className="w-8 text-center font-mono font-bold text-xs">
+                              {docCopies}
+                            </span>
+                            <button
+                              onClick={() => handleCopyChange(doc.id, 1)}
+                              className={`w-7 h-7 flex items-center justify-center rounded-lg transition ${
+                                isDark ? 'hover:bg-slate-800 text-slate-300' : 'hover:bg-slate-200 text-slate-700'
+                              }`}
+                              title="Increase copies"
+                            >
+                              <Plus className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Explicit Segmented Single / Double Switch with Icons */}
                         <div className={`p-1 rounded-xl border flex items-center ${
                           isDark ? 'bg-slate-950 border-slate-800' : 'bg-slate-100 border-slate-300'
                         }`}>
                           <button
                             onClick={() => handleModeChange(doc.id, 'SIMPLEX')}
-                            className={`px-3 py-1.5 text-xs font-bold rounded-lg transition ${
+                            className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-lg transition ${
                               doc.print_mode === 'SIMPLEX'
-                                ? 'bg-blue-600 text-white shadow'
+                                ? 'bg-blue-600 text-white shadow-md'
                                 : (isDark ? 'text-slate-400 hover:text-slate-200' : 'text-slate-600 hover:text-slate-900')
                             }`}
                           >
-                            Single
+                            <span>📄</span>
+                            <span>1-Sided</span>
                           </button>
                           <button
                             onClick={() => handleModeChange(doc.id, 'DUPLEX')}
-                            className={`px-3 py-1.5 text-xs font-bold rounded-lg transition ${
+                            className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-lg transition ${
                               doc.print_mode === 'DUPLEX'
-                                ? 'bg-blue-600 text-white shadow'
+                                ? 'bg-blue-600 text-white shadow-md'
                                 : (isDark ? 'text-slate-400 hover:text-slate-200' : 'text-slate-600 hover:text-slate-900')
                             }`}
                           >
-                            Double
+                            <span>📑</span>
+                            <span>2-Sided</span>
                           </button>
                         </div>
                       </div>
@@ -846,59 +941,77 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
                 })}
               </div>
 
-              {/* Bottom Action Deck */}
-              <div className={`absolute bottom-0 left-0 right-0 p-4 border-t flex items-center justify-between z-20 transition-colors backdrop-blur-xl ${
-                isDark ? 'bg-[#0B101D]/90 border-slate-800/80' : 'bg-white/95 border-slate-200 shadow-lg'
+              {/* Bottom Action Deck with High-Visibility Financial Readout */}
+              <div className={`absolute bottom-0 left-0 right-0 p-5 border-t flex items-center justify-between z-20 transition-colors backdrop-blur-xl ${
+                isDark ? 'bg-[#0B101D]/95 border-slate-800/90' : 'bg-white/95 border-slate-200 shadow-2xl'
               }`}>
-                <div className="flex items-center gap-6">
+                <div className="flex items-center gap-8">
                   <div>
                     <span className={`text-[11px] uppercase font-mono font-bold block tracking-wider ${
                       isDark ? 'text-slate-400' : 'text-slate-500'
                     }`}>
                       Paper Consumed
                     </span>
-                    <span className={`text-base font-bold flex items-center gap-1.5 ${
+                    <span className={`text-lg font-extrabold flex items-center gap-2 ${
                       isDark ? 'text-slate-100' : 'text-slate-900'
                     }`}>
-                      <Layers className="w-4 h-4 text-indigo-500" />
+                      <Layers className="w-5 h-5 text-indigo-500" />
                       {sheetSummary.totalSheets} Sheets
-                      <span className={`text-xs font-medium ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
+                      <span className={`text-xs font-normal ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
                         ({sheetSummary.doubleSheets} Double + {sheetSummary.singleCount} Single)
                       </span>
                     </span>
                   </div>
 
-                  <div className={`h-8 w-px ${isDark ? 'bg-slate-800' : 'bg-slate-200'}`} />
+                  <div className={`h-10 w-px ${isDark ? 'bg-slate-800' : 'bg-slate-200'}`} />
 
-                  {/* Customer Bill Calculation */}
+                  {/* Prominent High-Visibility Financial Readout (US-3.3) */}
                   <div>
                     <span className={`text-[11px] uppercase font-mono font-bold block tracking-wider ${
                       isDark ? 'text-slate-400' : 'text-slate-500'
                     }`}>
-                      Total Due (Cash/UPI)
+                      TOTAL DUE (CASH / UPI)
                     </span>
-                    <span className="text-xl font-mono font-extrabold text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
+                    <span className="text-3xl font-mono font-black text-emerald-600 dark:text-emerald-400 flex items-center gap-1 tracking-tight">
                       ₹{sheetSummary.estimatedCost.toFixed(2)}
                     </span>
                   </div>
                 </div>
 
                 <div className="flex items-center gap-3">
+                  {/* Download Master Button (Alt + D) */}
+                  <button
+                    onClick={handleDirectDownloadMaster}
+                    className={`flex items-center gap-1.5 px-3.5 py-3 rounded-xl border text-xs font-bold transition ${
+                      isDark 
+                        ? 'border-slate-700 bg-slate-800 hover:bg-slate-700 text-slate-200' 
+                        : 'border-slate-300 bg-white hover:bg-slate-100 text-slate-700 shadow-sm'
+                    }`}
+                    title="Download Master PDF (Alt + D)"
+                  >
+                    <Download className="w-4 h-4" />
+                    <span>Download (Alt+D)</span>
+                  </button>
+
+                  {/* Primary Call to Action: ⚡ PRINT ALL (X Sheets) with Enter key binding */}
                   <button
                     onClick={handlePreviewAndPrintMaster}
                     disabled={isPreviewLoading}
-                    className="flex items-center gap-2 px-6 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:bg-emerald-900 disabled:cursor-not-allowed text-white text-xs font-bold shadow-lg shadow-emerald-600/25 transition-all active:scale-95"
-                    title="Open compiled document with instant print dialog"
+                    className="flex items-center gap-2.5 px-7 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:bg-emerald-900 disabled:cursor-not-allowed text-white text-sm font-black shadow-xl shadow-emerald-600/30 transition-all active:scale-95"
+                    title="Open compiled document with instant print dialog (Press Enter)"
                   >
                     {isPreviewLoading ? (
                       <>
-                        <RefreshCw className="w-4 h-4 animate-spin" />
+                        <RefreshCw className="w-5 h-5 animate-spin" />
                         <span>Compiling Master PDF...</span>
                       </>
                     ) : (
                       <>
-                        <Printer className="w-4 h-4" />
-                        <span>Print Master PDF</span>
+                        <Zap className="w-5 h-5 fill-current" />
+                        <span>⚡ PRINT ALL ({sheetSummary.totalSheets} Sheets)</span>
+                        <kbd className="hidden md:inline-block ml-1 text-[10px] font-mono bg-emerald-700/80 px-1.5 py-0.5 rounded border border-emerald-400/30">
+                          ↵ Enter
+                        </kbd>
                       </>
                     )}
                   </button>
@@ -906,7 +1019,7 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
                   {activeSession.status !== 'COMPLETED' && (
                     <button
                       onClick={() => handleCompleteSession(activeSession.session_id)}
-                      className={`flex items-center gap-1.5 px-4 py-2.5 rounded-xl border text-xs font-bold transition ${
+                      className={`flex items-center gap-1.5 px-4 py-3 rounded-xl border text-xs font-bold transition ${
                         isDark 
                           ? 'border-slate-700 bg-slate-800 hover:bg-slate-700 text-slate-200' 
                           : 'border-slate-300 bg-slate-100 hover:bg-slate-200 text-slate-800'
@@ -942,7 +1055,6 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
               isDark ? 'bg-[#0E1528] border-slate-800' : 'bg-white border-slate-200'
             }`}
           >
-            {/* Lightbox Header */}
             <div className={`h-14 px-6 border-b flex items-center justify-between shrink-0 ${
               isDark ? 'border-slate-800 bg-[#0B101D]' : 'border-slate-200 bg-slate-50'
             }`}>
@@ -976,7 +1088,6 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
               </div>
             </div>
 
-            {/* Lightbox Document Viewport */}
             <div className="flex-1 bg-slate-950 flex items-center justify-center overflow-hidden p-2">
               <iframe
                 src={lightboxDoc.blobUrl}

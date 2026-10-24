@@ -16,8 +16,14 @@ interface PairingScreenProps {
 }
 
 export const PairingScreen: React.FC<PairingScreenProps> = ({ shopId, onPaired }) => {
+  // Resilient API base URL: Checks env var -> checks if localhost -> falls back to live EC2 backend
   const API_BASE = useMemo(() => {
-    return (import.meta as any).env?.VITE_API_URL || `http://${window.location.hostname}:8000`;
+    const envUrl = (import.meta as any).env?.VITE_API_URL;
+    if (envUrl && envUrl.trim().length > 0) return envUrl;
+    if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+      return 'http://127.0.0.1:8000';
+    }
+    return 'https://printflow-hub.duckdns.org';
   }, []);
 
   const WS_BASE = useMemo(() => API_BASE.replace(/^http/, 'ws'), [API_BASE]);
@@ -26,7 +32,6 @@ export const PairingScreen: React.FC<PairingScreenProps> = ({ shopId, onPaired }
   const [timeLeft, setTimeLeft] = useState<number>(20);
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
 
-  // Store the active QR code string in a ref to avoid resetting timer on duplicate poll results
   const currentQrRef = useRef<string | null>(null);
   const pollIntervalRef = useRef<any>(null);
 
@@ -34,7 +39,7 @@ export const PairingScreen: React.FC<PairingScreenProps> = ({ shopId, onPaired }
     if (newQr && newQr !== currentQrRef.current) {
       currentQrRef.current = newQr;
       setQrImage(newQr);
-      setTimeLeft(20); // Only reset when an actual new QR string arrives
+      setTimeLeft(20);
     }
   };
 
@@ -42,10 +47,11 @@ export const PairingScreen: React.FC<PairingScreenProps> = ({ shopId, onPaired }
     if (isManual) setIsRefreshing(true);
     try {
       const res = await fetch(`${API_BASE}/api/v1/gateway/status?shop_id=${shopId}`);
+      if (!res.ok) throw new Error('Status fetch failed');
       const data = await res.json();
       setGatewayStatus(data.status);
 
-      if (data.status === 'CONNECTED') {
+      if (data.status === 'CONNECTED' || data.status === 'AUTHENTICATED') {
         onPaired();
         return;
       }
@@ -53,29 +59,26 @@ export const PairingScreen: React.FC<PairingScreenProps> = ({ shopId, onPaired }
       if (data.qr_image) {
         applyNewQr(data.qr_image);
       }
-    } catch {
-      setGatewayStatus('DISCONNECTED');
+    } catch (err) {
+      console.warn('[PAIRING] Fetch notice:', err);
     } finally {
       if (isManual) setIsRefreshing(false);
     }
   };
 
   const handleManualRefresh = () => {
-    // Force reset current QR ref so fresh fetch will re-arm timer
     currentQrRef.current = null;
     fetchStatus(true);
   };
 
   useEffect(() => {
-    // Initial fetch
     fetchStatus();
 
-    // Poll status every 4 seconds (instead of 2) for resilience, without resetting timer
+    // Poll status every 4 seconds without resetting countdown
     pollIntervalRef.current = setInterval(() => {
       fetchStatus(false);
     }, 4000);
 
-    // WebSocket listener for instant zero-lag updates
     const wsUrl = `${WS_BASE}/ws/operator?shop_id=${shopId}`;
     const ws = new WebSocket(wsUrl);
 
@@ -86,7 +89,7 @@ export const PairingScreen: React.FC<PairingScreenProps> = ({ shopId, onPaired }
         if (msg.event === 'INITIAL_SNAPSHOT') {
           const status = msg.gateway_state?.status;
           if (status) setGatewayStatus(status);
-          if (status === 'CONNECTED') onPaired();
+          if (status === 'CONNECTED' || status === 'AUTHENTICATED') onPaired();
           if (msg.gateway_state?.qr_image) {
             applyNewQr(msg.gateway_state.qr_image);
           }
@@ -95,13 +98,13 @@ export const PairingScreen: React.FC<PairingScreenProps> = ({ shopId, onPaired }
         if (msg.event === `GATEWAY_STATUS_UPDATED:${shopId}`) {
           const status = msg.payload?.status;
           if (status) setGatewayStatus(status);
-          if (status === 'CONNECTED') onPaired();
+          if (status === 'CONNECTED' || status === 'AUTHENTICATED') onPaired();
           if (msg.payload?.qr_image) {
             applyNewQr(msg.payload.qr_image);
           }
         }
       } catch (err) {
-        console.error('Error handling pairing event:', err);
+        console.error('Socket message parse error:', err);
       }
     };
 
@@ -111,7 +114,7 @@ export const PairingScreen: React.FC<PairingScreenProps> = ({ shopId, onPaired }
     };
   }, [API_BASE, WS_BASE, shopId, onPaired]);
 
-  // Dedicated 1-second countdown interval (decoupled from network calls)
+  // Smooth 1-second countdown interval
   useEffect(() => {
     if (gatewayStatus === 'CONNECTED' || !qrImage) return;
 
@@ -130,7 +133,6 @@ export const PairingScreen: React.FC<PairingScreenProps> = ({ shopId, onPaired }
 
   return (
     <div className="h-screen w-screen flex flex-col items-center justify-center bg-[#070A11] text-slate-100 select-none p-6 font-sans relative overflow-hidden">
-      {/* Ambient background glow */}
       <div className="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-96 h-96 bg-indigo-600/10 blur-[130px] rounded-full pointer-events-none" />
 
       {/* Brand Header */}
@@ -145,7 +147,7 @@ export const PairingScreen: React.FC<PairingScreenProps> = ({ shopId, onPaired }
 
       {/* Main Container Card */}
       <div className="max-w-md w-full bg-[#0D1322] border border-slate-800/80 rounded-3xl p-8 shadow-2xl flex flex-col items-center relative z-10 backdrop-blur-xl">
-        {gatewayStatus === 'CONNECTED' ? (
+        {gatewayStatus === 'CONNECTED' || gatewayStatus === 'AUTHENTICATED' ? (
           <div className="py-8 flex flex-col items-center space-y-4 text-center animate-in fade-in zoom-in-95 duration-200">
             <div className="w-16 h-16 rounded-full bg-emerald-950/80 border border-emerald-800/80 flex items-center justify-center text-emerald-400">
               <CheckCircle2 className="w-8 h-8" />

@@ -161,10 +161,30 @@ async def operator_websocket(websocket: WebSocket, shop_id: str = Query("default
 
 @app.get(f"{settings.API_V1_STR}/gateway/status")
 async def get_gateway_status(shop_id: str = "default"):
+    # 1. If we already have a live QR or connection in memory, return it
+    current_state = gateway_states.get(shop_id)
+    if current_state and current_state.get("qr_image"):
+        return current_state
+
+    # 2. Otherwise actively tell the Express WhatsApp sidecar to spin up/refresh QR for this shop
     try:
-        requests.post(f"{GATEWAY_SIDECAR_URL}/api/gateway/init", json={"shop_id": shop_id}, timeout=1)
-    except Exception:
-        pass
+        res = requests.post(
+            f"{GATEWAY_SIDECAR_URL}/api/gateway/init", 
+            json={"shop_id": shop_id}, 
+            timeout=3
+        )
+        if res.ok:
+            data = res.json()
+            if data.get("qr_image"):
+                gateway_states[shop_id] = {
+                    "status": data.get("status", "SCAN_REQUIRED"),
+                    "qr_image": data.get("qr_image"),
+                    "updated_at": time.time()
+                }
+                return gateway_states[shop_id]
+    except Exception as e:
+        print(f"[GATEWAY] Init request to sidecar notice: {e}")
+
     return gateway_states.get(shop_id, {"status": "DISCONNECTED", "qr_image": None})
 
 @app.post(f"{settings.API_V1_STR}/gateway/qr-state")

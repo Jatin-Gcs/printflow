@@ -20,7 +20,8 @@ import {
   Moon,
   ChevronDown,
   User,
-  ShieldCheck
+  ShieldCheck,
+  ExternalLink
 } from 'lucide-react';
 
 interface DocumentMetadata {
@@ -62,7 +63,6 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
     return API_BASE.replace(/^http/, 'ws');
   }, [API_BASE]);
 
-  // Theme State: 'light' or 'dark' (Defaulting to light for counter ambient daylight legibility)
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
     const saved = localStorage.getItem('printflow_theme');
     if (saved === 'dark' || saved === 'light') return saved;
@@ -89,9 +89,12 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
   const [editSimplex, setEditSimplex] = useState('2.00');
   const [editDuplex, setEditDuplex] = useState('3.00');
 
+  // In-App Lightbox State
+  const [lightboxDoc, setLightboxDoc] = useState<{ id: string; filename: string; blobUrl: string } | null>(null);
+  const [isLightboxLoading, setIsLightboxLoading] = useState(false);
+
   const [isConnected, setIsConnected] = useState(false);
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
-  const [loadingDocId, setLoadingDocId] = useState<string | null>(null);
 
   const searchInputRef = useRef<HTMLInputElement>(null);
   const profileMenuRef = useRef<HTMLDivElement>(null);
@@ -175,16 +178,23 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
     return () => ws.close();
   }, [WS_BASE, selectedSessionId, shopId, onLogout]);
 
-  // Keyboard Shortcuts (/ for omnibar search, Escape for handover)
+  // Keyboard Shortcuts (/ for search, Escape for Lightbox/Handover)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (lightboxDoc) {
+          e.preventDefault();
+          closeLightbox();
+          return;
+        }
+        if (activeSession && !isSettingsOpen && !isProfileOpen) {
+          e.preventDefault();
+          handleCompleteSession(activeSession.session_id);
+        }
+      }
       if (e.key === '/' && document.activeElement !== searchInputRef.current) {
         e.preventDefault();
         searchInputRef.current?.focus();
-      }
-      if (e.key === 'Escape' && activeSession && !isSettingsOpen) {
-        e.preventDefault();
-        handleCompleteSession(activeSession.session_id);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -330,34 +340,30 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
     }
   };
 
-  // Preview & Print Individual File
-  const handlePreviewSingleDoc = async (docId: string) => {
+  // Open In-App Lightbox Preview (No tab switching needed)
+  const openLightbox = async (doc: DocumentMetadata) => {
     if (!activeSession) return;
-    setLoadingDocId(docId);
+    setIsLightboxLoading(true);
     try {
-      const url = `${API_BASE}/api/v1/sessions/${activeSession.session_id}/documents/${docId}/preview?shop_id=${shopId}`;
+      const url = `${API_BASE}/api/v1/sessions/${activeSession.session_id}/documents/${doc.id}/preview?shop_id=${shopId}`;
       const response = await fetch(url);
-      if (!response.ok) throw new Error('Document is still normalizing.');
+      if (!response.ok) throw new Error('Unable to load document preview.');
 
       const blob = await response.blob();
       const blobUrl = URL.createObjectURL(blob);
-
-      const previewWindow = window.open(blobUrl, '_blank');
-      if (!previewWindow) {
-        alert('Popup blocked. Please allow popups for this site to preview documents.');
-      } else {
-        previewWindow.onload = () => {
-          previewWindow.focus();
-          previewWindow.print();
-        };
-      }
-
-      setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
+      setLightboxDoc({ id: doc.id, filename: doc.original_filename, blobUrl });
     } catch (err) {
-      alert(`Document view error: ${err}`);
+      alert(`Lightbox error: ${err}`);
     } finally {
-      setLoadingDocId(null);
+      setIsLightboxLoading(false);
     }
+  };
+
+  const closeLightbox = () => {
+    if (lightboxDoc?.blobUrl) {
+      URL.revokeObjectURL(lightboxDoc.blobUrl);
+    }
+    setLightboxDoc(null);
   };
 
   // Live Sheet Count & Dynamic Bill Calculation
@@ -388,7 +394,7 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
       isDark ? 'bg-[#070A11] text-slate-100' : 'bg-[#F8FAFC] text-slate-900'
     }`}>
       
-      {/* Top Navbar */}
+      {/* Top Navbar with elevated stacking context */}
       <header className={`relative z-50 h-16 px-6 border-b flex items-center justify-between shrink-0 transition-colors duration-200 ${
         isDark 
           ? 'bg-[#0B101D]/90 border-slate-800/80 backdrop-blur-md' 
@@ -448,9 +454,8 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
           </kbd>
         </div>
 
-        {/* Global Controls & Ergonomic Shop Profile */}
+        {/* Header Controls & Profile Dropdown */}
         <div className="flex items-center gap-2.5 text-xs font-medium">
-          {/* High-Contrast Light / Dark Theme Switcher */}
           <button
             onClick={toggleTheme}
             className={`p-2 rounded-xl border transition flex items-center justify-center ${
@@ -463,7 +468,6 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
             {isDark ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
           </button>
 
-          {/* Price Settings Trigger */}
           <button
             onClick={() => setIsSettingsOpen(true)}
             className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl border font-semibold transition ${
@@ -477,7 +481,6 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
             <span>Price Settings</span>
           </button>
 
-          {/* Shopkeeper Profile Dropdown (Ergonomic, prevents accidental logout clicks) */}
           <div className="relative" ref={profileMenuRef}>
             <button
               onClick={() => setIsProfileOpen(!isProfileOpen)}
@@ -698,7 +701,7 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
                     )}
                   </div>
                   <p className={`text-xs mt-0.5 ${isDark ? 'text-slate-300' : 'text-slate-500 font-medium'}`}>
-                    {activeSession.documents.length} file(s) staged • Review options or print below
+                    {activeSession.documents.length} file(s) staged • Click thumbnail to inspect preview
                   </p>
                 </div>
 
@@ -737,39 +740,59 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
                 </div>
               </div>
 
-              {/* Document List */}
+              {/* Document List with Micro-Thumbnails and Cleaned Rows */}
               <div className="flex-1 overflow-y-auto p-6 space-y-3 pb-28">
                 {activeSession.documents.map((doc) => {
                   const isImage = doc.original_filename.match(/\.(jpg|jpeg|png|webp)$/i);
                   const isOddDouble = doc.print_mode === 'DUPLEX' && doc.page_count % 2 !== 0;
-                  const isThisDocLoading = loadingDocId === doc.id;
 
                   return (
                     <div
                       key={doc.id}
-                      className={`p-4 rounded-xl border flex items-center justify-between transition-colors ${
+                      className={`p-3.5 rounded-xl border flex items-center justify-between transition-colors ${
                         isDark 
                           ? 'bg-[#0E1528] border-slate-800/90 hover:border-slate-700' 
                           : 'bg-white border-slate-200 hover:border-slate-300 shadow-sm'
                       }`}
                     >
                       <div className="flex items-center gap-4">
-                        <div className={`p-2.5 rounded-xl border ${
-                          isImage
-                            ? isDark
-                              ? 'bg-amber-500/10 text-amber-400 border-amber-500/20'
-                              : 'bg-amber-50 text-amber-600 border-amber-200'
-                            : isDark
-                              ? 'bg-indigo-500/10 text-indigo-400 border-indigo-500/20'
-                              : 'bg-indigo-50 text-indigo-600 border-indigo-200'
-                        }`}>
-                          {isImage ? <ImageIcon className="w-5 h-5" /> : <FileText className="w-5 h-5" />}
+                        {/* Interactive Micro-Thumbnail Trigger */}
+                        <div
+                          onClick={() => openLightbox(doc)}
+                          className={`relative group w-12 h-16 rounded-lg border overflow-hidden flex flex-col items-center justify-center cursor-pointer transition transform active:scale-95 shadow-sm ${
+                            isImage
+                              ? isDark
+                                ? 'bg-amber-950/40 border-amber-800/60 text-amber-400'
+                                : 'bg-amber-50 border-amber-200 text-amber-600'
+                              : isDark
+                                ? 'bg-slate-900 border-indigo-900/60 text-indigo-400'
+                                : 'bg-slate-100 border-indigo-200 text-indigo-600'
+                          }`}
+                          title="Click to view full preview"
+                        >
+                          {isImage ? (
+                            <ImageIcon className="w-6 h-6 group-hover:scale-110 transition" />
+                          ) : (
+                            <FileText className="w-6 h-6 group-hover:scale-110 transition" />
+                          )}
+                          <span className="text-[9px] font-mono font-bold mt-1">
+                            {doc.page_count}P
+                          </span>
+
+                          {/* Hover Overlay Eye Icon */}
+                          <div className="absolute inset-0 bg-indigo-600/70 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                            <Eye className="w-4 h-4" />
+                          </div>
                         </div>
+
                         <div>
                           <div className="flex items-center gap-2">
-                            <span className={`text-sm font-bold max-w-md truncate ${
-                              isDark ? 'text-slate-100' : 'text-slate-900'
-                            }`}>
+                            <span 
+                              onClick={() => openLightbox(doc)}
+                              className={`text-sm font-bold max-w-md truncate cursor-pointer hover:underline ${
+                                isDark ? 'text-slate-100' : 'text-slate-900'
+                              }`}
+                            >
                               {doc.original_filename}
                             </span>
                             {isOddDouble && (
@@ -786,36 +809,19 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
                           <span className={`text-xs font-mono font-semibold mt-0.5 block ${
                             isDark ? 'text-slate-300' : 'text-slate-600'
                           }`}>
-                            {doc.page_count} Page{doc.page_count !== 1 ? 's' : ''} • A4 Size
+                            {doc.page_count} Page{doc.page_count !== 1 ? 's' : ''} • A4 Standard
                           </span>
                         </div>
                       </div>
 
+                      {/* Tactile Single / Double Sided Segmented Switch */}
                       <div className="flex items-center gap-3">
-                        <button
-                          onClick={() => handlePreviewSingleDoc(doc.id)}
-                          disabled={isThisDocLoading}
-                          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-semibold transition ${
-                            isDark 
-                              ? 'border-slate-700 bg-slate-800/90 hover:bg-slate-750 text-slate-200' 
-                              : 'border-slate-300 bg-slate-50 hover:bg-slate-100 text-slate-700 shadow-sm'
-                          }`}
-                          title="Preview and print this single document"
-                        >
-                          {isThisDocLoading ? (
-                            <RefreshCw className="w-3.5 h-3.5 animate-spin text-indigo-500" />
-                          ) : (
-                            <Eye className="w-3.5 h-3.5 text-indigo-500" />
-                          )}
-                          <span>Print File</span>
-                        </button>
-
                         <div className={`p-1 rounded-xl border flex items-center ${
                           isDark ? 'bg-slate-950 border-slate-800' : 'bg-slate-100 border-slate-300'
                         }`}>
                           <button
                             onClick={() => handleModeChange(doc.id, 'SIMPLEX')}
-                            className={`px-3 py-1 text-xs font-bold rounded-lg transition ${
+                            className={`px-3 py-1.5 text-xs font-bold rounded-lg transition ${
                               doc.print_mode === 'SIMPLEX'
                                 ? 'bg-blue-600 text-white shadow'
                                 : (isDark ? 'text-slate-400 hover:text-slate-200' : 'text-slate-600 hover:text-slate-900')
@@ -825,7 +831,7 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
                           </button>
                           <button
                             onClick={() => handleModeChange(doc.id, 'DUPLEX')}
-                            className={`px-3 py-1 text-xs font-bold rounded-lg transition ${
+                            className={`px-3 py-1.5 text-xs font-bold rounded-lg transition ${
                               doc.print_mode === 'DUPLEX'
                                 ? 'bg-blue-600 text-white shadow'
                                 : (isDark ? 'text-slate-400 hover:text-slate-200' : 'text-slate-600 hover:text-slate-900')
@@ -878,7 +884,6 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
                 </div>
 
                 <div className="flex items-center gap-3">
-                  {/* Single Unified Master Print Button */}
                   <button
                     onClick={handlePreviewAndPrintMaster}
                     disabled={isPreviewLoading}
@@ -924,6 +929,64 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
           )}
         </main>
       </div>
+
+      {/* In-App Lightbox Modal Preview */}
+      {lightboxDoc && (
+        <div 
+          onClick={closeLightbox}
+          className="fixed inset-0 z-[120] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-150"
+        >
+          <div 
+            onClick={(e) => e.stopPropagation()}
+            className={`w-full max-w-4xl h-[85vh] rounded-2xl flex flex-col overflow-hidden shadow-2xl border ${
+              isDark ? 'bg-[#0E1528] border-slate-800' : 'bg-white border-slate-200'
+            }`}
+          >
+            {/* Lightbox Header */}
+            <div className={`h-14 px-6 border-b flex items-center justify-between shrink-0 ${
+              isDark ? 'border-slate-800 bg-[#0B101D]' : 'border-slate-200 bg-slate-50'
+            }`}>
+              <div className="flex items-center gap-2 max-w-lg truncate">
+                <FileText className="w-4 h-4 text-indigo-500 shrink-0" />
+                <span className={`text-sm font-bold truncate ${isDark ? 'text-slate-100' : 'text-slate-900'}`}>
+                  {lightboxDoc.filename}
+                </span>
+              </div>
+
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => window.open(lightboxDoc.blobUrl, '_blank')}
+                  className={`p-1.5 rounded-lg border text-xs font-semibold flex items-center gap-1.5 transition ${
+                    isDark ? 'border-slate-700 bg-slate-800 text-slate-300 hover:bg-slate-700' : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-100'
+                  }`}
+                  title="Open in new window"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  <span>Popout</span>
+                </button>
+                <button
+                  onClick={closeLightbox}
+                  className={`p-1.5 rounded-lg border transition ${
+                    isDark ? 'border-slate-700 hover:bg-slate-800 text-slate-400' : 'border-slate-300 hover:bg-slate-200 text-slate-600'
+                  }`}
+                  title="Close (Esc)"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
+            {/* Lightbox Document Viewport */}
+            <div className="flex-1 bg-slate-950 flex items-center justify-center overflow-hidden p-2">
+              <iframe
+                src={lightboxDoc.blobUrl}
+                title="Document Preview"
+                className="w-full h-full rounded-lg border-0 bg-white"
+              />
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Pricing Settings Modal */}
       {isSettingsOpen && (

@@ -21,8 +21,6 @@ import {
   User,
   ShieldCheck,
   ExternalLink,
-  Plus,
-  Minus,
   Download,
   AlertTriangle
 } from 'lucide-react';
@@ -33,7 +31,6 @@ interface DocumentMetadata {
   normalized_path: string;
   page_count: number;
   print_mode: 'SIMPLEX' | 'DUPLEX';
-  copies?: number;
   is_encrypted: boolean;
   is_corrupted: boolean;
 }
@@ -67,7 +64,7 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
     return API_BASE.replace(/^http/, 'ws');
   }, [API_BASE]);
 
-  // Default to daylight Light Mode on counter monitors
+  // Default to Light Mode for day-shift screen legibility
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
     const saved = localStorage.getItem('printflow_theme');
     if (saved === 'dark' || saved === 'light') return saved;
@@ -87,7 +84,7 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
   const [searchQuery, setSearchQuery] = useState('');
   const [activeTab, setActiveTab] = useState<'ACTIVE' | 'COMPLETED'>('ACTIVE');
 
-  // Pricing State
+  // Rate card pricing state
   const [pricing, setPricing] = useState<PricingConfig>({ rate_simplex: 2.0, rate_duplex: 3.0 });
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isProfileOpen, setIsProfileOpen] = useState(false);
@@ -140,7 +137,6 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
         if (msg.event === 'INITIAL_SNAPSHOT') {
           const map: Record<string, SessionState> = {};
           msg.payload.forEach((s: SessionState) => {
-            s.documents = s.documents.map((d) => ({ ...d, copies: d.copies || 1 }));
             map[s.session_id] = s;
           });
           setSessions(map);
@@ -154,7 +150,6 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
           }
         } else if (msg.event === `SESSION_UPDATED:${shopId}`) {
           const updated: SessionState = msg.payload;
-          updated.documents = updated.documents.map((d) => ({ ...d, copies: d.copies || 1 }));
           setSessions((prev) => ({ ...prev, [updated.session_id]: updated }));
           setSelectedSessionId((curr) => curr || updated.session_id);
         } else if (msg.event === `SESSION_PURGED:${shopId}`) {
@@ -289,21 +284,6 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
     });
   };
 
-  const handleCopyChange = (docId: string, delta: number) => {
-    if (!activeSession) return;
-    setSessions((prev) => {
-      const s = prev[activeSession.session_id];
-      if (!s) return prev;
-      const updatedDocs = s.documents.map((d) => {
-        if (d.id !== docId) return d;
-        const currentCopies = d.copies || 1;
-        const nextCopies = Math.max(1, Math.min(99, currentCopies + delta));
-        return { ...d, copies: nextCopies };
-      });
-      return { ...prev, [s.session_id]: { ...s, documents: updatedDocs } };
-    });
-  };
-
   const handlePreviewAndPrintMaster = async () => {
     if (!activeSession) return;
     setIsPreviewLoading(true);
@@ -351,7 +331,7 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
     }
   };
 
-  // Keyboard Shortcuts with Strict Modal Precedence
+  // Strict Modal Precedence Keyboard Shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
@@ -430,6 +410,7 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
     setLightboxDoc(null);
   };
 
+  // Pure 1:1 Clean Sheet and Billing Calculation (No Stepper Multipliers)
   const sheetSummary = useMemo(() => {
     if (!activeSession) return { singleCount: 0, doubleSheets: 0, totalSheets: 0, estimatedCost: 0 };
     let singleCount = 0;
@@ -437,12 +418,11 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
 
     activeSession.documents.forEach((d) => {
       if (d.is_corrupted) return;
-      const copies = d.copies || 1;
       if (d.print_mode === 'SIMPLEX') {
-        singleCount += d.page_count * copies;
+        singleCount += d.page_count;
       } else {
         const paddedPerPage = d.page_count + (d.page_count % 2 !== 0 ? 1 : 0);
-        doublePages += paddedPerPage * copies;
+        doublePages += paddedPerPage;
       }
     });
 
@@ -748,7 +728,6 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
                     <h2 className="text-base font-bold font-mono tracking-tight text-indigo-600 dark:text-indigo-400">
                       {activeSession.customer_phone}
                     </h2>
-                    {/* Balanced Handed-Over Badge */}
                     {activeSession.status === 'COMPLETED' && (
                       <span className={`flex items-center gap-1 text-[11px] px-2.5 py-0.5 rounded-md font-semibold font-mono border ${
                         isDark 
@@ -786,7 +765,6 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
                     All 2-Sided
                   </button>
 
-                  {/* Single dedicated Handover Action */}
                   {activeSession.status !== 'COMPLETED' && (
                     <button
                       onClick={() => handleCompleteSession(activeSession.session_id)}
@@ -800,12 +778,11 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
                 </div>
               </div>
 
-              {/* Document List */}
+              {/* Clean Document List (No Stepper Multipliers) */}
               <div className="flex-1 overflow-y-auto p-6 space-y-3 pb-32">
                 {activeSession.documents.map((doc) => {
                   const isImage = doc.original_filename.match(/\.(jpg|jpeg|png|webp|bmp|tiff)$/i);
                   const isOddDouble = doc.print_mode === 'DUPLEX' && doc.page_count % 2 !== 0;
-                  const docCopies = doc.copies || 1;
                   const previewUrl = `${API_BASE}/api/v1/sessions/${activeSession.session_id}/documents/${doc.id}/preview?shop_id=${shopId}`;
                   const hasPageCount = doc.page_count > 0;
 
@@ -885,79 +862,43 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
                         </div>
                       </div>
 
-                      {/* Controls: Stepper + High-Contrast Toggles */}
-                      <div className="flex items-center gap-4">
-                        <div className="flex items-center gap-1.5">
-                          <span className={`text-xs font-bold uppercase tracking-wider mr-1 ${
-                            isDark ? 'text-slate-400' : 'text-slate-500'
-                          }`}>
-                            Copies:
-                          </span>
-                          <div className={`flex items-center rounded-xl border p-0.5 ${
-                            isDark ? 'bg-slate-950 border-slate-800' : 'bg-slate-100 border-slate-300'
-                          }`}>
-                            <button
-                              onClick={() => handleCopyChange(doc.id, -1)}
-                              disabled={docCopies <= 1}
-                              className={`w-7 h-7 flex items-center justify-center rounded-lg transition disabled:opacity-40 disabled:cursor-not-allowed ${
-                                isDark ? 'hover:bg-slate-800 text-slate-300' : 'hover:bg-slate-200 text-slate-700'
-                              }`}
-                              title="Decrease copies"
-                            >
-                              <Minus className="w-3.5 h-3.5" />
-                            </button>
-                            <span className="w-8 text-center font-mono font-bold text-xs">
-                              {docCopies}
-                            </span>
-                            <button
-                              onClick={() => handleCopyChange(doc.id, 1)}
-                              className={`w-7 h-7 flex items-center justify-center rounded-lg transition ${
-                                isDark ? 'hover:bg-slate-800 text-slate-300' : 'hover:bg-slate-200 text-slate-700'
-                              }`}
-                              title="Increase copies"
-                            >
-                              <Plus className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
-                        </div>
-
-                        <div className={`p-1 rounded-xl border flex items-center gap-1 ${
-                          isDark ? 'bg-slate-950 border-slate-800' : 'bg-slate-100 border-slate-300'
-                        }`}>
-                          <button
-                            onClick={() => handleModeChange(doc.id, 'SIMPLEX')}
-                            className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-lg transition ${
-                              doc.print_mode === 'SIMPLEX'
-                                ? 'bg-blue-600 text-white shadow-md'
-                                : isDark
-                                  ? 'text-slate-300 hover:text-white hover:bg-slate-900'
-                                  : 'text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 shadow-xs'
-                            }`}
-                          >
-                            <span>📄</span>
-                            <span>1-Sided</span>
-                          </button>
-                          <button
-                            onClick={() => handleModeChange(doc.id, 'DUPLEX')}
-                            className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-lg transition ${
-                              doc.print_mode === 'DUPLEX'
-                                ? 'bg-blue-600 text-white shadow-md'
-                                : isDark
-                                  ? 'text-slate-300 hover:text-white hover:bg-slate-900'
-                                  : 'text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 shadow-xs'
-                            }`}
-                          >
-                            <span>📑</span>
-                            <span>2-Sided</span>
-                          </button>
-                        </div>
+                      {/* Focused Control: High-Contrast Mode Toggles */}
+                      <div className={`p-1 rounded-xl border flex items-center gap-1 ${
+                        isDark ? 'bg-slate-950 border-slate-800' : 'bg-slate-100 border-slate-300'
+                      }`}>
+                        <button
+                          onClick={() => handleModeChange(doc.id, 'SIMPLEX')}
+                          className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-lg transition ${
+                            doc.print_mode === 'SIMPLEX'
+                              ? 'bg-blue-600 text-white shadow-md'
+                              : isDark
+                                ? 'text-slate-300 hover:text-white hover:bg-slate-900'
+                                : 'text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 shadow-xs'
+                          }`}
+                        >
+                          <span>📄</span>
+                          <span>1-Sided</span>
+                        </button>
+                        <button
+                          onClick={() => handleModeChange(doc.id, 'DUPLEX')}
+                          className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-lg transition ${
+                            doc.print_mode === 'DUPLEX'
+                              ? 'bg-blue-600 text-white shadow-md'
+                              : isDark
+                                ? 'text-slate-300 hover:text-white hover:bg-slate-900'
+                                : 'text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 shadow-xs'
+                          }`}
+                        >
+                          <span>📑</span>
+                          <span>2-Sided</span>
+                        </button>
                       </div>
                     </div>
                   );
                 })}
               </div>
 
-              {/* Bottom Dock: Solid Hardware CTA */}
+              {/* Bottom Production Dock */}
               <div className={`absolute bottom-0 left-0 right-0 p-5 border-t flex items-center justify-between z-20 transition-colors backdrop-blur-xl ${
                 isDark ? 'bg-[#0B101D]/95 border-slate-800/90' : 'bg-white/95 border-slate-200 shadow-2xl'
               }`}>
@@ -1007,7 +948,6 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
                     <span>Download (Alt+D)</span>
                   </button>
 
-                  {/* Clean Hardware Execution CTA */}
                   <button
                     onClick={handlePreviewAndPrintMaster}
                     disabled={isPreviewLoading}
@@ -1077,7 +1017,7 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
         </div>
       )}
 
-      {/* Lightbox Preview */}
+      {/* In-App Lightbox Modal Preview */}
       {lightboxDoc && (
         <div 
           onClick={closeLightbox}
@@ -1133,7 +1073,7 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
         </div>
       )}
 
-      {/* Pricing Settings Modal with High-Contrast Inputs */}
+      {/* Pricing Settings Modal */}
       {isSettingsOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
           <div className={`w-full max-w-sm rounded-3xl p-6 shadow-2xl border ${

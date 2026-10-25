@@ -2,6 +2,9 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   Printer,
   FileText,
+  FileCheck2,
+  Presentation,
+  Image as ImageIcon,
   Lock,
   Clock,
   RefreshCw,
@@ -331,7 +334,7 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
     }
   };
 
-  // Strict Modal Precedence Keyboard Shortcuts
+  // Keyboard Shortcuts with Strict Modal Precedence
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
@@ -410,7 +413,7 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
     setLightboxDoc(null);
   };
 
-  // Pure 1:1 Clean Sheet and Billing Calculation (No Stepper Multipliers)
+  // Pure 1:1 Clean Sheet and Billing Calculation
   const sheetSummary = useMemo(() => {
     if (!activeSession) return { singleCount: 0, doubleSheets: 0, totalSheets: 0, estimatedCost: 0 };
     let singleCount = 0;
@@ -432,6 +435,101 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
 
     return { singleCount, doubleSheets, totalSheets, estimatedCost };
   }, [activeSession, pricing]);
+
+  // Distinct Icon Badge Renderer per file type
+  const renderDocumentBadge = (filename: string, pageCount: number) => {
+    const ext = filename.split('.').pop()?.toLowerCase() || '';
+    const hasCount = pageCount > 0;
+    const countLabel = hasCount ? `${pageCount}P` : '...';
+
+    // 1. PowerPoint & Presentation Slides
+    if (['ppt', 'pptx', 'odp', 'pps', 'ppsx'].includes(ext)) {
+      return (
+        <div className={`relative group w-12 h-16 rounded-xl border flex flex-col items-center justify-center shrink-0 transition active:scale-95 shadow-xs ${
+          isDark 
+            ? 'bg-amber-950/40 border-amber-800/60 text-amber-400' 
+            : 'bg-amber-50 border-amber-200 text-amber-600'
+        }`}>
+          <Presentation className="w-5 h-5 group-hover:scale-110 transition" />
+          <span className="text-[9px] font-mono font-bold mt-1 tracking-tight">{countLabel}</span>
+          <span className="text-[8px] font-mono font-black uppercase opacity-75">PPT</span>
+          <div className="absolute inset-0 bg-amber-600/80 text-white rounded-xl flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+            <Eye className="w-4 h-4" />
+          </div>
+        </div>
+      );
+    }
+
+    // 2. Word & Text Documents
+    if (['doc', 'docx', 'odt', 'rtf', 'txt'].includes(ext)) {
+      return (
+        <div className={`relative group w-12 h-16 rounded-xl border flex flex-col items-center justify-center shrink-0 transition active:scale-95 shadow-xs ${
+          isDark 
+            ? 'bg-blue-950/40 border-blue-800/60 text-blue-400' 
+            : 'bg-blue-50 border-blue-200 text-blue-600'
+        }`}>
+          <FileCheck2 className="w-5 h-5 group-hover:scale-110 transition" />
+          <span className="text-[9px] font-mono font-bold mt-1 tracking-tight">{countLabel}</span>
+          <span className="text-[8px] font-mono font-black uppercase opacity-75">DOC</span>
+          <div className="absolute inset-0 bg-blue-600/80 text-white rounded-xl flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+            <Eye className="w-4 h-4" />
+          </div>
+        </div>
+      );
+    }
+
+    // 3. Camera Scans & Raster Images
+    if (['jpg', 'jpeg', 'png', 'webp', 'bmp', 'tiff'].includes(ext)) {
+      return (
+        <div className={`relative group w-12 h-16 rounded-xl border flex flex-col items-center justify-center shrink-0 transition active:scale-95 shadow-xs ${
+          isDark 
+            ? 'bg-emerald-950/40 border-emerald-800/60 text-emerald-400' 
+            : 'bg-emerald-50 border-emerald-200 text-emerald-600'
+        }`}>
+          <ImageIcon className="w-5 h-5 group-hover:scale-110 transition" />
+          <span className="text-[9px] font-mono font-bold mt-1 tracking-tight">{countLabel}</span>
+          <span className="text-[8px] font-mono font-black uppercase opacity-75">IMG</span>
+          <div className="absolute inset-0 bg-emerald-600/80 text-white rounded-xl flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+            <Eye className="w-4 h-4" />
+          </div>
+        </div>
+      );
+    }
+
+    // 4. Standard PDF
+    if (ext === 'pdf') {
+      return (
+        <div className={`relative group w-12 h-16 rounded-xl border flex flex-col items-center justify-center shrink-0 transition active:scale-95 shadow-xs ${
+          isDark 
+            ? 'bg-rose-950/40 border-rose-800/60 text-rose-400' 
+            : 'bg-rose-50 border-rose-200 text-rose-600'
+        }`}>
+          <FileText className="w-5 h-5 group-hover:scale-110 transition" />
+          <span className="text-[9px] font-mono font-bold mt-1 tracking-tight">{countLabel}</span>
+          <span className="text-[8px] font-mono font-black uppercase opacity-75">PDF</span>
+          <div className="absolute inset-0 bg-rose-600/80 text-white rounded-xl flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+            <Eye className="w-4 h-4" />
+          </div>
+        </div>
+      );
+    }
+
+    // 5. Default Generic Document
+    return (
+      <div className={`relative group w-12 h-16 rounded-xl border flex flex-col items-center justify-center shrink-0 transition active:scale-95 shadow-xs ${
+        isDark 
+          ? 'bg-indigo-950/40 border-indigo-800/60 text-indigo-400' 
+          : 'bg-indigo-50 border-indigo-200 text-indigo-600'
+      }`}>
+        <FileText className="w-5 h-5 group-hover:scale-110 transition" />
+        <span className="text-[9px] font-mono font-bold mt-1 tracking-tight">{countLabel}</span>
+        <span className="text-[8px] font-mono font-black uppercase opacity-75">FILE</span>
+        <div className="absolute inset-0 bg-indigo-600/80 text-white rounded-xl flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+          <Eye className="w-4 h-4" />
+        </div>
+      </div>
+    );
+  };
 
   return (
     <div className={`h-screen w-screen flex flex-col overflow-hidden select-none font-sans transition-colors duration-200 ${
@@ -778,12 +876,10 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
                 </div>
               </div>
 
-              {/* Clean Document List (No Stepper Multipliers) */}
+              {/* Clean Document List with Type-Specific Badges */}
               <div className="flex-1 overflow-y-auto p-6 space-y-3 pb-32">
                 {activeSession.documents.map((doc) => {
-                  const isImage = doc.original_filename.match(/\.(jpg|jpeg|png|webp|bmp|tiff)$/i);
                   const isOddDouble = doc.print_mode === 'DUPLEX' && doc.page_count % 2 !== 0;
-                  const previewUrl = `${API_BASE}/api/v1/sessions/${activeSession.session_id}/documents/${doc.id}/preview?shop_id=${shopId}`;
                   const hasPageCount = doc.page_count > 0;
 
                   return (
@@ -796,41 +892,13 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
                       }`}
                     >
                       <div className="flex items-center gap-4">
-                        {/* Dynamic Micro-Thumbnail */}
-                        <div
-                          onClick={() => openLightbox(doc)}
-                          className={`relative group w-12 h-16 rounded-lg border overflow-hidden flex flex-col items-center justify-center cursor-pointer transition transform active:scale-95 shadow-sm ${
-                            isImage
-                              ? isDark
-                                ? 'bg-amber-950/40 border-amber-800/60'
-                                : 'bg-slate-100 border-slate-200'
-                              : isDark
-                                ? 'bg-slate-900 border-indigo-900/60 text-indigo-400'
-                                : 'bg-slate-100 border-indigo-200 text-indigo-600'
-                          }`}
+                        {/* Type-Specific Vector Document Badge (Zero extra network requests) */}
+                        <div 
+                          onClick={() => openLightbox(doc)} 
+                          className="cursor-pointer"
                           title="Click to view full preview"
                         >
-                          {isImage ? (
-                            <img
-                              src={previewUrl}
-                              alt={doc.original_filename}
-                              className="w-full h-full object-cover"
-                              onError={(e) => {
-                                (e.target as HTMLElement).style.display = 'none';
-                              }}
-                            />
-                          ) : (
-                            <>
-                              <FileText className="w-6 h-6 group-hover:scale-110 transition" />
-                              <span className="text-[9px] font-mono font-bold mt-1">
-                                {hasPageCount ? `${doc.page_count}P` : '...'}
-                              </span>
-                            </>
-                          )}
-
-                          <div className="absolute inset-0 bg-indigo-600/70 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
-                            <Eye className="w-4 h-4" />
-                          </div>
+                          {renderDocumentBadge(doc.original_filename, doc.page_count)}
                         </div>
 
                         <div>
@@ -862,7 +930,7 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
                         </div>
                       </div>
 
-                      {/* Focused Control: High-Contrast Mode Toggles */}
+                      {/* Focused Control: High-Contrast Segmented Switch */}
                       <div className={`p-1 rounded-xl border flex items-center gap-1 ${
                         isDark ? 'bg-slate-950 border-slate-800' : 'bg-slate-100 border-slate-300'
                       }`}>

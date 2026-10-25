@@ -2,7 +2,6 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   Printer,
   FileText,
-  Image as ImageIcon,
   Lock,
   Clock,
   RefreshCw,
@@ -25,7 +24,6 @@ import {
   Plus,
   Minus,
   Download,
-  Zap,
   AlertTriangle
 } from 'lucide-react';
 
@@ -69,10 +67,11 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
     return API_BASE.replace(/^http/, 'ws');
   }, [API_BASE]);
 
+  // Default to daylight Light Mode on counter monitors
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
     const saved = localStorage.getItem('printflow_theme');
     if (saved === 'dark' || saved === 'light') return saved;
-    return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    return 'light';
   });
 
   const toggleTheme = () => {
@@ -183,7 +182,6 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
     return () => ws.close();
   }, [WS_BASE, selectedSessionId, shopId, onLogout]);
 
-  // Non-blocking in-app logout execution
   const executeLogoutWhatsApp = async () => {
     setShowLogoutConfirm(false);
     setIsProfileOpen(false);
@@ -353,20 +351,35 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
     }
   };
 
+  // Keyboard Shortcuts with Strict Modal Precedence
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         if (showLogoutConfirm) {
           e.preventDefault();
+          e.stopPropagation();
           setShowLogoutConfirm(false);
+          return;
+        }
+        if (isSettingsOpen) {
+          e.preventDefault();
+          e.stopPropagation();
+          setIsSettingsOpen(false);
+          return;
+        }
+        if (isProfileOpen) {
+          e.preventDefault();
+          e.stopPropagation();
+          setIsProfileOpen(false);
           return;
         }
         if (lightboxDoc) {
           e.preventDefault();
+          e.stopPropagation();
           closeLightbox();
           return;
         }
-        if (activeSession && !isSettingsOpen && !isProfileOpen) {
+        if (activeSession) {
           e.preventDefault();
           handleCompleteSession(activeSession.session_id);
         }
@@ -445,7 +458,7 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
       isDark ? 'bg-[#070A11] text-slate-100' : 'bg-[#F8FAFC] text-slate-900'
     }`}>
       
-      {/* Top Navbar: Clean, without redundant Price Settings */}
+      {/* Top Navbar */}
       <header className={`relative z-50 h-16 px-6 border-b flex items-center justify-between shrink-0 transition-colors duration-200 ${
         isDark 
           ? 'bg-[#0B101D]/90 border-slate-800/80 backdrop-blur-md' 
@@ -505,7 +518,7 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
           </kbd>
         </div>
 
-        {/* Header Right: Theme Switcher & Profile Dropdown Only */}
+        {/* Header Right */}
         <div className="flex items-center gap-3 text-xs font-medium">
           <button
             onClick={toggleTheme}
@@ -519,7 +532,6 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
             {isDark ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
           </button>
 
-          {/* Shopkeeper Profile Dropdown (Hosts Rate Card & Logout) */}
           <div className="relative" ref={profileMenuRef}>
             <button
               onClick={() => setIsProfileOpen(!isProfileOpen)}
@@ -736,9 +748,14 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
                     <h2 className="text-base font-bold font-mono tracking-tight text-indigo-600 dark:text-indigo-400">
                       {activeSession.customer_phone}
                     </h2>
+                    {/* Balanced Handed-Over Badge */}
                     {activeSession.status === 'COMPLETED' && (
-                      <span className="flex items-center gap-1 text-[11px] px-2 py-0.5 rounded font-semibold font-mono bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-400 border border-emerald-300 dark:border-emerald-800">
-                        <CheckCheck className="w-3 h-3" /> Handed Over
+                      <span className={`flex items-center gap-1 text-[11px] px-2.5 py-0.5 rounded-md font-semibold font-mono border ${
+                        isDark 
+                          ? 'bg-emerald-950/50 text-emerald-400 border-emerald-800/60' 
+                          : 'bg-emerald-50 text-emerald-800 border-emerald-200 shadow-xs'
+                      }`}>
+                        <CheckCheck className="w-3.5 h-3.5" /> Handed Over
                       </span>
                     )}
                   </div>
@@ -783,13 +800,14 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
                 </div>
               </div>
 
-              {/* Document List with Dynamic Image Thumbnails & High-Contrast Toggles */}
+              {/* Document List */}
               <div className="flex-1 overflow-y-auto p-6 space-y-3 pb-32">
                 {activeSession.documents.map((doc) => {
                   const isImage = doc.original_filename.match(/\.(jpg|jpeg|png|webp|bmp|tiff)$/i);
                   const isOddDouble = doc.print_mode === 'DUPLEX' && doc.page_count % 2 !== 0;
                   const docCopies = doc.copies || 1;
                   const previewUrl = `${API_BASE}/api/v1/sessions/${activeSession.session_id}/documents/${doc.id}/preview?shop_id=${shopId}`;
+                  const hasPageCount = doc.page_count > 0;
 
                   return (
                     <div
@@ -801,7 +819,7 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
                       }`}
                     >
                       <div className="flex items-center gap-4">
-                        {/* Dynamic Micro-Thumbnail: Renders real image for photos */}
+                        {/* Dynamic Micro-Thumbnail */}
                         <div
                           onClick={() => openLightbox(doc)}
                           className={`relative group w-12 h-16 rounded-lg border overflow-hidden flex flex-col items-center justify-center cursor-pointer transition transform active:scale-95 shadow-sm ${
@@ -821,7 +839,6 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
                               alt={doc.original_filename}
                               className="w-full h-full object-cover"
                               onError={(e) => {
-                                // Fallback if image load fails
                                 (e.target as HTMLElement).style.display = 'none';
                               }}
                             />
@@ -829,12 +846,11 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
                             <>
                               <FileText className="w-6 h-6 group-hover:scale-110 transition" />
                               <span className="text-[9px] font-mono font-bold mt-1">
-                                {doc.page_count}P
+                                {hasPageCount ? `${doc.page_count}P` : '...'}
                               </span>
                             </>
                           )}
 
-                          {/* Hover Overlay */}
                           <div className="absolute inset-0 bg-indigo-600/70 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
                             <Eye className="w-4 h-4" />
                           </div>
@@ -842,7 +858,6 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
 
                         <div>
                           <div className="flex items-center gap-2">
-                            {/* Color shift on hover without underline artifact */}
                             <span 
                               onClick={() => openLightbox(doc)}
                               className={`text-sm font-bold max-w-md truncate cursor-pointer transition ${
@@ -865,14 +880,13 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
                           <span className={`text-xs font-mono font-semibold mt-0.5 block ${
                             isDark ? 'text-slate-300' : 'text-slate-600'
                           }`}>
-                            {doc.page_count} Page{doc.page_count !== 1 ? 's' : ''} • A4 Standard
+                            {hasPageCount ? `${doc.page_count} Page${doc.page_count !== 1 ? 's' : ''}` : 'Counting pages...'} • A4 Standard
                           </span>
                         </div>
                       </div>
 
-                      {/* Controls: Copies Stepper + High-Contrast Mode Toggles */}
+                      {/* Controls: Stepper + High-Contrast Toggles */}
                       <div className="flex items-center gap-4">
-                        {/* Copies Stepper */}
                         <div className="flex items-center gap-1.5">
                           <span className={`text-xs font-bold uppercase tracking-wider mr-1 ${
                             isDark ? 'text-slate-400' : 'text-slate-500'
@@ -907,7 +921,6 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
                           </div>
                         </div>
 
-                        {/* High-Contrast Segmented Switch */}
                         <div className={`p-1 rounded-xl border flex items-center gap-1 ${
                           isDark ? 'bg-slate-950 border-slate-800' : 'bg-slate-100 border-slate-300'
                         }`}>
@@ -944,7 +957,7 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
                 })}
               </div>
 
-              {/* Bottom Production Dock (Dedicated to Printing and Billing) */}
+              {/* Bottom Dock: Solid Hardware CTA */}
               <div className={`absolute bottom-0 left-0 right-0 p-5 border-t flex items-center justify-between z-20 transition-colors backdrop-blur-xl ${
                 isDark ? 'bg-[#0B101D]/95 border-slate-800/90' : 'bg-white/95 border-slate-200 shadow-2xl'
               }`}>
@@ -968,7 +981,6 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
 
                   <div className={`h-10 w-px ${isDark ? 'bg-slate-800' : 'bg-slate-200'}`} />
 
-                  {/* High-Visibility Financial Readout */}
                   <div>
                     <span className={`text-[11px] uppercase font-mono font-bold block tracking-wider ${
                       isDark ? 'text-slate-400' : 'text-slate-500'
@@ -982,7 +994,6 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
                 </div>
 
                 <div className="flex items-center gap-3">
-                  {/* Download Master Button (Alt + D) */}
                   <button
                     onClick={handleDirectDownloadMaster}
                     className={`flex items-center gap-1.5 px-3.5 py-3 rounded-xl border text-xs font-bold transition ${
@@ -996,7 +1007,7 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
                     <span>Download (Alt+D)</span>
                   </button>
 
-                  {/* Primary CTA: ⚡ PRINT ALL */}
+                  {/* Clean Hardware Execution CTA */}
                   <button
                     onClick={handlePreviewAndPrintMaster}
                     disabled={isPreviewLoading}
@@ -1010,9 +1021,9 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
                       </>
                     ) : (
                       <>
-                        <Zap className="w-5 h-5 fill-current" />
-                        <span>⚡ PRINT ALL ({sheetSummary.totalSheets} Sheets)</span>
-                        <kbd className="hidden md:inline-block ml-1 text-[10px] font-mono bg-emerald-700/80 px-1.5 py-0.5 rounded border border-emerald-400/30">
+                        <Printer className="w-5 h-5" />
+                        <span>PRINT ALL ({sheetSummary.totalSheets} Sheets)</span>
+                        <kbd className="hidden md:inline-block ml-1 text-[10px] font-mono bg-emerald-700/80 px-2 py-0.5 rounded border border-emerald-400/30 font-semibold">
                           ↵ Enter
                         </kbd>
                       </>
@@ -1031,7 +1042,7 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
         </main>
       </div>
 
-      {/* Non-Blocking In-App Logout Confirmation Modal */}
+      {/* Logout Confirmation Modal */}
       {showLogoutConfirm && (
         <div className="fixed inset-0 z-[150] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in duration-150">
           <div className={`w-full max-w-sm rounded-3xl p-6 shadow-2xl border ${
@@ -1053,7 +1064,7 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
                   isDark ? 'border-slate-700 bg-slate-800 text-slate-300 hover:bg-slate-750' : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-100'
                 }`}
               >
-                Cancel
+                Cancel (Esc)
               </button>
               <button
                 onClick={executeLogoutWhatsApp}
@@ -1066,7 +1077,7 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
         </div>
       )}
 
-      {/* In-App Lightbox Modal Preview */}
+      {/* Lightbox Preview */}
       {lightboxDoc && (
         <div 
           onClick={closeLightbox}
@@ -1122,10 +1133,10 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
         </div>
       )}
 
-      {/* Pricing Settings Modal */}
+      {/* Pricing Settings Modal with High-Contrast Inputs */}
       {isSettingsOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-          <div className={`w-full max-w-sm rounded-2xl p-6 shadow-2xl border ${
+          <div className={`w-full max-w-sm rounded-3xl p-6 shadow-2xl border ${
             isDark ? 'bg-[#0E1528] border-slate-800 text-slate-100' : 'bg-white border-slate-200 text-slate-900'
           }`}>
             <div className="flex items-center justify-between mb-4">
@@ -1155,8 +1166,10 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
                   step="0.5"
                   value={editSimplex}
                   onChange={(e) => setEditSimplex(e.target.value)}
-                  className={`w-full rounded-lg px-3 py-2 font-mono text-sm border focus:outline-none focus:ring-1 focus:ring-indigo-500 ${
-                    isDark ? 'bg-slate-900 border-slate-700 text-slate-100' : 'bg-slate-50 border-slate-300 text-slate-900'
+                  className={`w-full rounded-xl px-3 py-2.5 font-mono text-sm border focus:outline-none focus:ring-2 focus:ring-blue-600 transition ${
+                    isDark 
+                      ? 'bg-slate-900 border-slate-700 text-slate-100' 
+                      : 'bg-slate-50 border-slate-300 text-slate-900 focus:bg-white shadow-xs'
                   }`}
                 />
               </div>
@@ -1170,26 +1183,28 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
                   step="0.5"
                   value={editDuplex}
                   onChange={(e) => setEditDuplex(e.target.value)}
-                  className={`w-full rounded-lg px-3 py-2 font-mono text-sm border focus:outline-none focus:ring-1 focus:ring-indigo-500 ${
-                    isDark ? 'bg-slate-900 border-slate-700 text-slate-100' : 'bg-slate-50 border-slate-300 text-slate-900'
+                  className={`w-full rounded-xl px-3 py-2.5 font-mono text-sm border focus:outline-none focus:ring-2 focus:ring-blue-600 transition ${
+                    isDark 
+                      ? 'bg-slate-900 border-slate-700 text-slate-100' 
+                      : 'bg-slate-50 border-slate-300 text-slate-900 focus:bg-white shadow-xs'
                   }`}
                 />
               </div>
 
-              <div className={`pt-3 flex items-center justify-end gap-2 border-t ${
+              <div className={`pt-4 flex items-center justify-end gap-2 border-t ${
                 isDark ? 'border-slate-800' : 'border-slate-200'
               }`}>
                 <button
                   onClick={() => setIsSettingsOpen(false)}
-                  className={`px-3.5 py-1.5 rounded-lg border font-medium transition ${
+                  className={`px-3.5 py-2 rounded-xl border font-semibold transition ${
                     isDark ? 'border-slate-700 text-slate-300 hover:bg-slate-800' : 'border-slate-300 text-slate-700 hover:bg-slate-100'
                   }`}
                 >
-                  Cancel
+                  Cancel (Esc)
                 </button>
                 <button
                   onClick={handleSavePricing}
-                  className="px-4 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-bold shadow transition"
+                  className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold shadow-md transition active:scale-95"
                 >
                   Save Rates
                 </button>

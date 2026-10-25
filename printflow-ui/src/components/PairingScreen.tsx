@@ -7,7 +7,9 @@ import {
   Printer, 
   Smartphone, 
   Settings, 
-  QrCode 
+  QrCode,
+  Sun,
+  Moon
 } from 'lucide-react';
 
 interface PairingScreenProps {
@@ -16,7 +18,6 @@ interface PairingScreenProps {
 }
 
 export const PairingScreen: React.FC<PairingScreenProps> = ({ shopId, onPaired }) => {
-  // Resilient API base URL: Checks env var -> checks if localhost -> falls back to live EC2 backend
   const API_BASE = useMemo(() => {
     const envUrl = (import.meta as any).env?.VITE_API_URL;
     if (envUrl && envUrl.trim().length > 0) return envUrl;
@@ -27,6 +28,22 @@ export const PairingScreen: React.FC<PairingScreenProps> = ({ shopId, onPaired }
   }, []);
 
   const WS_BASE = useMemo(() => API_BASE.replace(/^http/, 'ws'), [API_BASE]);
+
+  // Inherit or toggle theme directly on the Pairing Station
+  const [theme, setTheme] = useState<'light' | 'dark'>(() => {
+    const saved = localStorage.getItem('printflow_theme');
+    if (saved === 'dark' || saved === 'light') return saved;
+    return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  });
+
+  const toggleTheme = () => {
+    const next = theme === 'light' ? 'dark' : 'light';
+    setTheme(next);
+    localStorage.setItem('printflow_theme', next);
+  };
+
+  const isDark = theme === 'dark';
+
   const [gatewayStatus, setGatewayStatus] = useState<string>('CONNECTING');
   const [qrImage, setQrImage] = useState<string | null>(null);
   const [timeLeft, setTimeLeft] = useState<number>(20);
@@ -74,7 +91,6 @@ export const PairingScreen: React.FC<PairingScreenProps> = ({ shopId, onPaired }
   useEffect(() => {
     fetchStatus();
 
-    // Poll status every 4 seconds without resetting countdown
     pollIntervalRef.current = setInterval(() => {
       fetchStatus(false);
     }, 4000);
@@ -114,7 +130,7 @@ export const PairingScreen: React.FC<PairingScreenProps> = ({ shopId, onPaired }
     };
   }, [API_BASE, WS_BASE, shopId, onPaired]);
 
-  // Smooth 1-second countdown interval
+  // Smooth 1-second countdown
   useEffect(() => {
     if (gatewayStatus === 'CONNECTED' || !qrImage) return;
 
@@ -132,28 +148,53 @@ export const PairingScreen: React.FC<PairingScreenProps> = ({ shopId, onPaired }
   const progressPercent = (timeLeft / 20) * 100;
 
   return (
-    <div className="h-screen w-screen flex flex-col items-center justify-center bg-[#070A11] text-slate-100 select-none p-6 font-sans relative overflow-hidden">
-      <div className="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-96 h-96 bg-indigo-600/10 blur-[130px] rounded-full pointer-events-none" />
+    <div className={`h-screen w-screen flex flex-col items-center justify-center select-none p-6 font-sans relative overflow-hidden transition-colors duration-200 ${
+      isDark ? 'bg-[#070A11] text-slate-100' : 'bg-[#F8FAFC] text-slate-900'
+    }`}>
+      {/* Background glow ambiance */}
+      <div className={`absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-96 h-96 blur-[130px] rounded-full pointer-events-none ${
+        isDark ? 'bg-indigo-600/10' : 'bg-indigo-500/5'
+      }`} />
 
-      {/* Brand Header */}
-      <div className="flex items-center gap-3 mb-8 relative z-10">
-        <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-indigo-600 to-violet-500 flex items-center justify-center shadow-lg shadow-indigo-600/30">
-          <Printer className="w-5 h-5 text-white" />
+      {/* Brand Header with Theme Toggle */}
+      <div className="flex items-center justify-between max-w-md w-full mb-6 relative z-10">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-indigo-600 to-violet-500 flex items-center justify-center shadow-lg shadow-indigo-600/30">
+            <Printer className="w-5 h-5 text-white" />
+          </div>
+          <h1 className="text-xl font-bold tracking-tight">
+            PrintFlow <span className={`font-mono text-xs px-2 py-0.5 rounded border ml-2 ${
+              isDark ? 'bg-indigo-950/60 text-indigo-400 border-indigo-800' : 'bg-indigo-50 text-indigo-700 border-indigo-200'
+            }`}>Setup Station</span>
+          </h1>
         </div>
-        <h1 className="text-xl font-bold tracking-tight">
-          PrintFlow <span className="text-indigo-400 font-mono text-xs px-2 py-0.5 rounded bg-indigo-950/60 border border-indigo-800 ml-2">Setup Station</span>
-        </h1>
+
+        <button
+          onClick={toggleTheme}
+          className={`p-2 rounded-xl border transition flex items-center justify-center ${
+            isDark 
+              ? 'border-slate-800 bg-slate-900 text-amber-400 hover:bg-slate-800' 
+              : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-100 shadow-sm'
+          }`}
+          title={`Switch to ${isDark ? 'Light' : 'Dark'} mode`}
+        >
+          {isDark ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+        </button>
       </div>
 
-      {/* Main Container Card */}
-      <div className="max-w-md w-full bg-[#0D1322] border border-slate-800/80 rounded-3xl p-8 shadow-2xl flex flex-col items-center relative z-10 backdrop-blur-xl">
+      {/* Main Container Card: Adaptive Light / Dark Tokens */}
+      <div className={`max-w-md w-full rounded-3xl p-8 shadow-2xl flex flex-col items-center relative z-10 backdrop-blur-xl border transition-colors ${
+        isDark ? 'bg-[#0D1322] border-slate-800/80 shadow-black/80' : 'bg-white border-slate-200 shadow-slate-200/80'
+      }`}>
         {gatewayStatus === 'CONNECTED' || gatewayStatus === 'AUTHENTICATED' ? (
           <div className="py-8 flex flex-col items-center space-y-4 text-center animate-in fade-in zoom-in-95 duration-200">
-            <div className="w-16 h-16 rounded-full bg-emerald-950/80 border border-emerald-800/80 flex items-center justify-center text-emerald-400">
+            <div className={`w-16 h-16 rounded-full border flex items-center justify-center ${
+              isDark ? 'bg-emerald-950/80 border-emerald-800/80 text-emerald-400' : 'bg-emerald-50 border-emerald-200 text-emerald-600'
+            }`}>
               <CheckCircle2 className="w-8 h-8" />
             </div>
-            <h2 className="text-lg font-bold text-slate-100">WhatsApp Linked Successfully</h2>
-            <p className="text-xs text-slate-400 max-w-xs">
+            <h2 className="text-lg font-bold">WhatsApp Linked Successfully</h2>
+            <p className={`text-xs max-w-xs ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
               Device paired to workspace. Redirecting to counter dashboard...
             </p>
             <button
@@ -167,14 +208,18 @@ export const PairingScreen: React.FC<PairingScreenProps> = ({ shopId, onPaired }
         ) : (
           <>
             <div className="text-center mb-6">
-              <h2 className="text-lg font-bold text-slate-100">Link Counter WhatsApp</h2>
-              <p className="text-xs text-slate-400 mt-1 font-mono">
-                Workspace: <span className="text-indigo-400 font-bold px-1.5 py-0.5 rounded bg-slate-900 border border-slate-800">{shopId}</span>
+              <h2 className="text-lg font-bold">Link Counter WhatsApp</h2>
+              <p className={`text-xs mt-1 font-mono ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
+                Workspace: <span className={`font-bold px-1.5 py-0.5 rounded border ${
+                  isDark ? 'text-indigo-400 bg-slate-900 border-slate-800' : 'text-indigo-700 bg-slate-100 border-slate-200'
+                }`}>{shopId}</span>
               </p>
             </div>
 
-            {/* QR Container with 20s Countdown Ring */}
-            <div className="relative p-3 bg-white rounded-2xl shadow-inner flex items-center justify-center border-4 border-slate-800/40">
+            {/* QR Container with Countdown Ring */}
+            <div className={`relative p-3 bg-white rounded-2xl shadow-inner flex items-center justify-center border-4 ${
+              isDark ? 'border-slate-800/40' : 'border-slate-200'
+            }`}>
               {qrImage ? (
                 <div className="relative w-64 h-64 flex items-center justify-center">
                   <img
@@ -207,11 +252,13 @@ export const PairingScreen: React.FC<PairingScreenProps> = ({ shopId, onPaired }
                 </div>
               )}
 
-              {/* Circular 20-second Progress Ring */}
+              {/* Circular Countdown Progress Badge */}
               {qrImage && !isExpired && (
-                <div className="absolute -top-3 -right-3 w-9 h-9 bg-slate-900 border border-slate-700 rounded-full flex items-center justify-center shadow-lg">
+                <div className={`absolute -top-3 -right-3 w-9 h-9 rounded-full flex items-center justify-center shadow-lg border ${
+                  isDark ? 'bg-slate-900 border-slate-700' : 'bg-white border-slate-300'
+                }`}>
                   <svg className="w-8 h-8 transform -rotate-90">
-                    <circle cx="16" cy="16" r="13" stroke="#1e293b" strokeWidth="2.5" fill="none" />
+                    <circle cx="16" cy="16" r="13" stroke={isDark ? '#1e293b' : '#e2e8f0'} strokeWidth="2.5" fill="none" />
                     <circle
                       cx="16"
                       cy="16"
@@ -225,37 +272,47 @@ export const PairingScreen: React.FC<PairingScreenProps> = ({ shopId, onPaired }
                       className="transition-all duration-1000 ease-linear"
                     />
                   </svg>
-                  <span className="absolute text-[10px] font-mono font-bold text-slate-200">
+                  <span className={`absolute text-[10px] font-mono font-bold ${isDark ? 'text-slate-200' : 'text-slate-800'}`}>
                     {timeLeft}
                   </span>
                 </div>
               )}
             </div>
 
-            {/* Step-by-Step Onboarding with Smartphone Cues */}
-            <div className="w-full mt-6 space-y-2.5 text-xs text-slate-300 bg-slate-900/60 border border-slate-800/80 rounded-2xl p-4">
+            {/* Step-by-Step Onboarding */}
+            <div className={`w-full mt-6 space-y-2.5 text-xs rounded-2xl p-4 border ${
+              isDark ? 'bg-slate-900/60 border-slate-800/80 text-slate-300' : 'bg-slate-50 border-slate-200 text-slate-700'
+            }`}>
               <div className="flex items-center gap-3">
-                <div className="w-6 h-6 rounded-lg bg-indigo-500/10 text-indigo-400 flex items-center justify-center border border-indigo-500/20 shrink-0">
+                <div className={`w-6 h-6 rounded-lg flex items-center justify-center border shrink-0 ${
+                  isDark ? 'bg-indigo-500/10 text-indigo-400 border-indigo-500/20' : 'bg-indigo-50 text-indigo-600 border-indigo-200'
+                }`}>
                   <Smartphone className="w-3.5 h-3.5" />
                 </div>
                 <span>Open <strong>WhatsApp</strong> on shop phone</span>
               </div>
               <div className="flex items-center gap-3">
-                <div className="w-6 h-6 rounded-lg bg-blue-500/10 text-blue-400 flex items-center justify-center border border-blue-500/20 shrink-0">
+                <div className={`w-6 h-6 rounded-lg flex items-center justify-center border shrink-0 ${
+                  isDark ? 'bg-blue-500/10 text-blue-400 border-blue-500/20' : 'bg-blue-50 text-blue-600 border-blue-200'
+                }`}>
                   <Settings className="w-3.5 h-3.5" />
                 </div>
                 <span>Tap <strong>Linked Devices</strong> → <strong>Link a Device</strong></span>
               </div>
               <div className="flex items-center gap-3">
-                <div className="w-6 h-6 rounded-lg bg-emerald-500/10 text-emerald-400 flex items-center justify-center border border-emerald-500/20 shrink-0">
+                <div className={`w-6 h-6 rounded-lg flex items-center justify-center border shrink-0 ${
+                  isDark ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' : 'bg-emerald-50 text-emerald-600 border-emerald-200'
+                }`}>
                   <QrCode className="w-3.5 h-3.5" />
                 </div>
                 <span>Point camera at this screen to pair</span>
               </div>
             </div>
 
-            <div className="mt-5 flex items-center gap-2 text-[11px] text-slate-400 font-mono">
-              <ShieldCheck className="w-4 h-4 text-emerald-400" />
+            <div className={`mt-5 flex items-center gap-2 text-[11px] font-mono ${
+              isDark ? 'text-slate-400' : 'text-slate-500'
+            }`}>
+              <ShieldCheck className="w-4 h-4 text-emerald-500" />
               <span>Isolated shop credential store</span>
             </div>
           </>

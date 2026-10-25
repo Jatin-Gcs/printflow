@@ -25,7 +25,8 @@ import {
   Plus,
   Minus,
   Download,
-  Zap
+  Zap,
+  AlertTriangle
 } from 'lucide-react';
 
 interface DocumentMetadata {
@@ -87,10 +88,11 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
   const [searchQuery, setSearchQuery] = useState('');
   const [activeTab, setActiveTab] = useState<'ACTIVE' | 'COMPLETED'>('ACTIVE');
 
-  // Adjustable Pricing Rate Card State
+  // Pricing State
   const [pricing, setPricing] = useState<PricingConfig>({ rate_simplex: 2.0, rate_duplex: 3.0 });
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isProfileOpen, setIsProfileOpen] = useState(false);
+  const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
   const [editSimplex, setEditSimplex] = useState('2.00');
   const [editDuplex, setEditDuplex] = useState('3.00');
 
@@ -139,7 +141,6 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
         if (msg.event === 'INITIAL_SNAPSHOT') {
           const map: Record<string, SessionState> = {};
           msg.payload.forEach((s: SessionState) => {
-            // Guarantee default copies = 1 for legacy or unannotated sessions
             s.documents = s.documents.map((d) => ({ ...d, copies: d.copies || 1 }));
             map[s.session_id] = s;
           });
@@ -182,11 +183,10 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
     return () => ws.close();
   }, [WS_BASE, selectedSessionId, shopId, onLogout]);
 
-  const handleLogoutWhatsApp = async () => {
+  // Non-blocking in-app logout execution
+  const executeLogoutWhatsApp = async () => {
+    setShowLogoutConfirm(false);
     setIsProfileOpen(false);
-    if (!confirm('Disconnect WhatsApp from this counter? A fresh pairing QR code will be generated.')) {
-      return;
-    }
 
     try {
       await fetch(`${API_BASE}/api/v1/gateway/logout?shop_id=${shopId}`, {
@@ -271,7 +271,6 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
     ? sessions[selectedSessionId]
     : displayedList[0] || null;
 
-  // Single / Double Sided Toggles
   const handleModeChange = (docId: string, mode: 'SIMPLEX' | 'DUPLEX') => {
     if (!activeSession) return;
     setSessions((prev) => {
@@ -292,7 +291,6 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
     });
   };
 
-  // Tactile Copy Multiplier Stepper
   const handleCopyChange = (docId: string, delta: number) => {
     if (!activeSession) return;
     setSessions((prev) => {
@@ -308,7 +306,6 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
     });
   };
 
-  // Compile Master PDF in memory and auto-trigger native print dialog
   const handlePreviewAndPrintMaster = async () => {
     if (!activeSession) return;
     setIsPreviewLoading(true);
@@ -338,7 +335,6 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
     }
   };
 
-  // Alt + D Download Action
   const handleDirectDownloadMaster = async () => {
     if (!activeSession) return;
     try {
@@ -357,11 +353,14 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
     }
   };
 
-  // Global Keyboard Shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Escape for Lightbox or Handover
       if (e.key === 'Escape') {
+        if (showLogoutConfirm) {
+          e.preventDefault();
+          setShowLogoutConfirm(false);
+          return;
+        }
         if (lightboxDoc) {
           e.preventDefault();
           closeLightbox();
@@ -373,20 +372,17 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
         }
       }
 
-      // '/' to focus search
       if (e.key === '/' && document.activeElement !== searchInputRef.current) {
         e.preventDefault();
         searchInputRef.current?.focus();
       }
 
-      // Alt + D to download compiled Master PDF
       if (e.altKey && (e.key === 'd' || e.key === 'D')) {
         e.preventDefault();
         handleDirectDownloadMaster();
       }
 
-      // Enter to trigger primary Master Print (when not typing in an input field)
-      if (e.key === 'Enter' && activeSession && !lightboxDoc && !isSettingsOpen && !isProfileOpen) {
+      if (e.key === 'Enter' && activeSession && !lightboxDoc && !isSettingsOpen && !isProfileOpen && !showLogoutConfirm) {
         const tagName = (document.activeElement?.tagName || '').toLowerCase();
         if (tagName !== 'input' && tagName !== 'textarea') {
           e.preventDefault();
@@ -399,7 +395,6 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
     return () => window.removeEventListener('keydown', handleKeyDown);
   });
 
-  // Open In-App Lightbox Preview
   const openLightbox = async (doc: DocumentMetadata) => {
     if (!activeSession) return;
     try {
@@ -422,7 +417,6 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
     setLightboxDoc(null);
   };
 
-  // Live Sheet Count & Dynamic Bill Calculation with Copy Multiplier
   const sheetSummary = useMemo(() => {
     if (!activeSession) return { singleCount: 0, doubleSheets: 0, totalSheets: 0, estimatedCost: 0 };
     let singleCount = 0;
@@ -451,7 +445,7 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
       isDark ? 'bg-[#070A11] text-slate-100' : 'bg-[#F8FAFC] text-slate-900'
     }`}>
       
-      {/* Top Navbar */}
+      {/* Top Navbar: Clean, without redundant Price Settings */}
       <header className={`relative z-50 h-16 px-6 border-b flex items-center justify-between shrink-0 transition-colors duration-200 ${
         isDark 
           ? 'bg-[#0B101D]/90 border-slate-800/80 backdrop-blur-md' 
@@ -511,8 +505,8 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
           </kbd>
         </div>
 
-        {/* Header Controls & Profile Dropdown */}
-        <div className="flex items-center gap-2.5 text-xs font-medium">
+        {/* Header Right: Theme Switcher & Profile Dropdown Only */}
+        <div className="flex items-center gap-3 text-xs font-medium">
           <button
             onClick={toggleTheme}
             className={`p-2 rounded-xl border transition flex items-center justify-center ${
@@ -525,19 +519,7 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
             {isDark ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
           </button>
 
-          <button
-            onClick={() => setIsSettingsOpen(true)}
-            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl border font-semibold transition ${
-              isDark 
-                ? 'border-slate-800 bg-slate-900 text-slate-200 hover:bg-slate-800' 
-                : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-100 shadow-sm'
-            }`}
-            title="Set Price Rates"
-          >
-            <Settings className="w-4 h-4 text-indigo-500" />
-            <span>Price Settings</span>
-          </button>
-
+          {/* Shopkeeper Profile Dropdown (Hosts Rate Card & Logout) */}
           <div className="relative" ref={profileMenuRef}>
             <button
               onClick={() => setIsProfileOpen(!isProfileOpen)}
@@ -591,7 +573,10 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
                   <div className={`h-px my-1 ${isDark ? 'bg-slate-800' : 'bg-slate-100'}`} />
 
                   <button
-                    onClick={handleLogoutWhatsApp}
+                    onClick={() => {
+                      setIsProfileOpen(false);
+                      setShowLogoutConfirm(true);
+                    }}
                     className="w-full flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-semibold text-rose-600 dark:text-rose-400 hover:bg-rose-500/10 transition"
                   >
                     <LogOut className="w-3.5 h-3.5" />
@@ -784,10 +769,11 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
                     All 2-Sided
                   </button>
 
+                  {/* Single dedicated Handover Action */}
                   {activeSession.status !== 'COMPLETED' && (
                     <button
                       onClick={() => handleCompleteSession(activeSession.session_id)}
-                      className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg border border-emerald-600 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition ml-2 shadow-sm"
+                      className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg border border-emerald-600 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition ml-2 shadow-sm"
                       title="Clear from active queue (Press Esc)"
                     >
                       <CheckCircle2 className="w-3.5 h-3.5" />
@@ -797,12 +783,13 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
                 </div>
               </div>
 
-              {/* Document List with Tactile Copies Stepper & Explicit Icons */}
+              {/* Document List with Dynamic Image Thumbnails & High-Contrast Toggles */}
               <div className="flex-1 overflow-y-auto p-6 space-y-3 pb-32">
                 {activeSession.documents.map((doc) => {
-                  const isImage = doc.original_filename.match(/\.(jpg|jpeg|png|webp)$/i);
+                  const isImage = doc.original_filename.match(/\.(jpg|jpeg|png|webp|bmp|tiff)$/i);
                   const isOddDouble = doc.print_mode === 'DUPLEX' && doc.page_count % 2 !== 0;
                   const docCopies = doc.copies || 1;
+                  const previewUrl = `${API_BASE}/api/v1/sessions/${activeSession.session_id}/documents/${doc.id}/preview?shop_id=${shopId}`;
 
                   return (
                     <div
@@ -814,14 +801,14 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
                       }`}
                     >
                       <div className="flex items-center gap-4">
-                        {/* Interactive Micro-Thumbnail Trigger */}
+                        {/* Dynamic Micro-Thumbnail: Renders real image for photos */}
                         <div
                           onClick={() => openLightbox(doc)}
                           className={`relative group w-12 h-16 rounded-lg border overflow-hidden flex flex-col items-center justify-center cursor-pointer transition transform active:scale-95 shadow-sm ${
                             isImage
                               ? isDark
-                                ? 'bg-amber-950/40 border-amber-800/60 text-amber-400'
-                                : 'bg-amber-50 border-amber-200 text-amber-600'
+                                ? 'bg-amber-950/40 border-amber-800/60'
+                                : 'bg-slate-100 border-slate-200'
                               : isDark
                                 ? 'bg-slate-900 border-indigo-900/60 text-indigo-400'
                                 : 'bg-slate-100 border-indigo-200 text-indigo-600'
@@ -829,14 +816,25 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
                           title="Click to view full preview"
                         >
                           {isImage ? (
-                            <ImageIcon className="w-6 h-6 group-hover:scale-110 transition" />
+                            <img
+                              src={previewUrl}
+                              alt={doc.original_filename}
+                              className="w-full h-full object-cover"
+                              onError={(e) => {
+                                // Fallback if image load fails
+                                (e.target as HTMLElement).style.display = 'none';
+                              }}
+                            />
                           ) : (
-                            <FileText className="w-6 h-6 group-hover:scale-110 transition" />
+                            <>
+                              <FileText className="w-6 h-6 group-hover:scale-110 transition" />
+                              <span className="text-[9px] font-mono font-bold mt-1">
+                                {doc.page_count}P
+                              </span>
+                            </>
                           )}
-                          <span className="text-[9px] font-mono font-bold mt-1">
-                            {doc.page_count}P
-                          </span>
 
+                          {/* Hover Overlay */}
                           <div className="absolute inset-0 bg-indigo-600/70 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
                             <Eye className="w-4 h-4" />
                           </div>
@@ -844,10 +842,11 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
 
                         <div>
                           <div className="flex items-center gap-2">
+                            {/* Color shift on hover without underline artifact */}
                             <span 
                               onClick={() => openLightbox(doc)}
-                              className={`text-sm font-bold max-w-md truncate cursor-pointer hover:underline ${
-                                isDark ? 'text-slate-100' : 'text-slate-900'
+                              className={`text-sm font-bold max-w-md truncate cursor-pointer transition ${
+                                isDark ? 'text-slate-100 hover:text-indigo-400' : 'text-slate-900 hover:text-indigo-600'
                               }`}
                             >
                               {doc.original_filename}
@@ -871,9 +870,9 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
                         </div>
                       </div>
 
-                      {/* Controls: Copies Stepper + Explicit Segmented Mode */}
+                      {/* Controls: Copies Stepper + High-Contrast Mode Toggles */}
                       <div className="flex items-center gap-4">
-                        {/* Per-Document Copies Stepper [-] [ 1 ] [+] */}
+                        {/* Copies Stepper */}
                         <div className="flex items-center gap-1.5">
                           <span className={`text-xs font-bold uppercase tracking-wider mr-1 ${
                             isDark ? 'text-slate-400' : 'text-slate-500'
@@ -908,8 +907,8 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
                           </div>
                         </div>
 
-                        {/* Explicit Segmented Single / Double Switch with Icons */}
-                        <div className={`p-1 rounded-xl border flex items-center ${
+                        {/* High-Contrast Segmented Switch */}
+                        <div className={`p-1 rounded-xl border flex items-center gap-1 ${
                           isDark ? 'bg-slate-950 border-slate-800' : 'bg-slate-100 border-slate-300'
                         }`}>
                           <button
@@ -917,7 +916,9 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
                             className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-lg transition ${
                               doc.print_mode === 'SIMPLEX'
                                 ? 'bg-blue-600 text-white shadow-md'
-                                : (isDark ? 'text-slate-400 hover:text-slate-200' : 'text-slate-600 hover:text-slate-900')
+                                : isDark
+                                  ? 'text-slate-300 hover:text-white hover:bg-slate-900'
+                                  : 'text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 shadow-xs'
                             }`}
                           >
                             <span>📄</span>
@@ -928,7 +929,9 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
                             className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-lg transition ${
                               doc.print_mode === 'DUPLEX'
                                 ? 'bg-blue-600 text-white shadow-md'
-                                : (isDark ? 'text-slate-400 hover:text-slate-200' : 'text-slate-600 hover:text-slate-900')
+                                : isDark
+                                  ? 'text-slate-300 hover:text-white hover:bg-slate-900'
+                                  : 'text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 shadow-xs'
                             }`}
                           >
                             <span>📑</span>
@@ -941,7 +944,7 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
                 })}
               </div>
 
-              {/* Bottom Action Deck with High-Visibility Financial Readout */}
+              {/* Bottom Production Dock (Dedicated to Printing and Billing) */}
               <div className={`absolute bottom-0 left-0 right-0 p-5 border-t flex items-center justify-between z-20 transition-colors backdrop-blur-xl ${
                 isDark ? 'bg-[#0B101D]/95 border-slate-800/90' : 'bg-white/95 border-slate-200 shadow-2xl'
               }`}>
@@ -965,7 +968,7 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
 
                   <div className={`h-10 w-px ${isDark ? 'bg-slate-800' : 'bg-slate-200'}`} />
 
-                  {/* Prominent High-Visibility Financial Readout (US-3.3) */}
+                  {/* High-Visibility Financial Readout */}
                   <div>
                     <span className={`text-[11px] uppercase font-mono font-bold block tracking-wider ${
                       isDark ? 'text-slate-400' : 'text-slate-500'
@@ -993,7 +996,7 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
                     <span>Download (Alt+D)</span>
                   </button>
 
-                  {/* Primary Call to Action: ⚡ PRINT ALL (X Sheets) with Enter key binding */}
+                  {/* Primary CTA: ⚡ PRINT ALL */}
                   <button
                     onClick={handlePreviewAndPrintMaster}
                     disabled={isPreviewLoading}
@@ -1015,21 +1018,6 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
                       </>
                     )}
                   </button>
-
-                  {activeSession.status !== 'COMPLETED' && (
-                    <button
-                      onClick={() => handleCompleteSession(activeSession.session_id)}
-                      className={`flex items-center gap-1.5 px-4 py-3 rounded-xl border text-xs font-bold transition ${
-                        isDark 
-                          ? 'border-slate-700 bg-slate-800 hover:bg-slate-700 text-slate-200' 
-                          : 'border-slate-300 bg-slate-100 hover:bg-slate-200 text-slate-800'
-                      }`}
-                      title="Handover order and clear card (Esc)"
-                    >
-                      <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
-                      <span>Handover (Esc)</span>
-                    </button>
-                  )}
                 </div>
               </div>
             </>
@@ -1042,6 +1030,41 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
           )}
         </main>
       </div>
+
+      {/* Non-Blocking In-App Logout Confirmation Modal */}
+      {showLogoutConfirm && (
+        <div className="fixed inset-0 z-[150] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in duration-150">
+          <div className={`w-full max-w-sm rounded-3xl p-6 shadow-2xl border ${
+            isDark ? 'bg-[#0E1528] border-slate-800 text-slate-100' : 'bg-white border-slate-200 text-slate-900'
+          }`}>
+            <div className="w-12 h-12 rounded-2xl bg-rose-500/10 border border-rose-500/20 text-rose-500 flex items-center justify-center mb-4">
+              <AlertTriangle className="w-6 h-6" />
+            </div>
+
+            <h3 className="text-base font-bold mb-1">Disconnect Counter WhatsApp?</h3>
+            <p className={`text-xs leading-relaxed mb-6 ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
+              This will unlink the active phone from workspace <strong className="font-mono">{shopId}</strong> and generate a fresh pairing QR code.
+            </p>
+
+            <div className="flex items-center justify-end gap-3">
+              <button
+                onClick={() => setShowLogoutConfirm(false)}
+                className={`px-4 py-2 rounded-xl text-xs font-semibold border transition ${
+                  isDark ? 'border-slate-700 bg-slate-800 text-slate-300 hover:bg-slate-750' : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-100'
+                }`}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={executeLogoutWhatsApp}
+                className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold transition shadow-lg shadow-rose-600/25 active:scale-95"
+              >
+                Disconnect Counter
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* In-App Lightbox Modal Preview */}
       {lightboxDoc && (

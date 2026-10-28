@@ -18,7 +18,7 @@ const FASTAPI_QR_ENDPOINT = process.env.QR_ENDPOINT || 'http://127.0.0.1:8000/ap
 const AUTH_BASE_DIR = path.resolve('auth_info_baileys');
 const GATEWAY_PORT = process.env.GATEWAY_PORT || 3001;
 
-// Use a Set so .has() works, and include all presentation + office mime variations
+// Allowlist for PDFs, Images, Word, PowerPoint, and Excel
 const ALLOWED_MIME_TYPES = new Set([
   'application/pdf',
   'image/jpeg',
@@ -32,13 +32,19 @@ const ALLOWED_MIME_TYPES = new Set([
   'application/vnd.openxmlformats-officedocument.presentationml.presentation',
   'application/vnd.openxmlformats-officedocument.presentationml.slideshow',
   'application/vnd.oasis.opendocument.presentation',
-  'application/vnd.oasis.opendocument.text'
+  'application/vnd.oasis.opendocument.text',
+  // Excel & Spreadsheet formats
+  'application/vnd.ms-excel',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/vnd.oasis.opendocument.spreadsheet',
+  'text/csv'
 ]);
 
 const ALLOWED_EXTENSIONS = new Set([
   '.pdf', '.jpg', '.jpeg', '.png', '.webp', '.bmp', '.tiff',
-  '.doc', '.docx', '.odt', '.rtf',
-  '.ppt', '.pptx', '.odp', '.pps', '.ppsx'
+  '.doc', '.docx', '.odt', '.rtf', '.txt',
+  '.ppt', '.pptx', '.odp', '.pps', '.ppsx',
+  '.xls', '.xlsx', '.ods', '.csv'
 ]);
 
 const activeSockets = new Map();
@@ -192,7 +198,6 @@ async function getOrInitSocket(shopId = 'default') {
       const rawMime = (media.mimetype || '').split(';')[0].toLowerCase();
       const detectedMime = rawMime || (mediaType === 'imageMessage' ? 'image/jpeg' : 'application/pdf');
 
-      // Check filename extension as fallback if WhatsApp sends generic application/octet-stream
       const originalFileName = media.fileName || '';
       const fileExt = path.extname(originalFileName).toLowerCase();
 
@@ -232,7 +237,7 @@ async function getOrInitSocket(shopId = 'default') {
         const destinationPath = path.join(customerDir, `${Date.now()}_${originalFilename}`);
         fs.writeFileSync(destinationPath, buffer);
 
-        console.log(`[GATEWAY:${shopId}] Ingested presentation/document "${originalFilename}" from ${customerPhone}`);
+        console.log(`[GATEWAY:${shopId}] Ingested file "${originalFilename}" from ${customerPhone}`);
 
         await axios.post(FASTAPI_ENDPOINT, {
           shop_id: shopId,

@@ -27,6 +27,7 @@ class DocumentMetadata(BaseModel):
     id: str
     original_filename: str
     normalized_path: str
+    source_path: Optional[str] = None
     page_count: int
     print_mode: PrintMode
     copies: int = 1

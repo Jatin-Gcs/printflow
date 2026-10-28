@@ -120,6 +120,7 @@ def process_normalization_background(shop_id: str, session_id: str, payload: Inb
         id=doc_id,
         original_filename=payload.original_filename,
         normalized_path=str(out_pdf.resolve()),
+        source_path=str(src_file.resolve()),
         page_count=pages,
         print_mode=mode,
         is_encrypted=is_locked,
@@ -161,12 +162,10 @@ async def operator_websocket(websocket: WebSocket, shop_id: str = Query("default
 
 @app.get(f"{settings.API_V1_STR}/gateway/status")
 async def get_gateway_status(shop_id: str = "default"):
-    # 1. If we already have a live QR or connection in memory, return it
     current_state = gateway_states.get(shop_id)
     if current_state and current_state.get("qr_image"):
         return current_state
 
-    # 2. Otherwise actively tell the Express WhatsApp sidecar to spin up/refresh QR for this shop
     try:
         res = requests.post(
             f"{GATEWAY_SIDECAR_URL}/api/gateway/init", 
@@ -210,7 +209,6 @@ async def logout_gateway(shop_id: str = Query("default")):
     except Exception as e:
         print(f"[GATEWAY] Logout sidecar call notice (handled gracefully): {e}")
 
-    # Reset in-memory gateway state and broadcast
     gateway_states[shop_id] = {
         "status": "LOGGED_OUT",
         "qr_image": None,
@@ -278,8 +276,6 @@ async def get_document_preview(
 ):
     """
     Returns the viewable PDF or media stream for an individual document.
-    Includes automated fallback to original file or on-the-fly generation 
-    so preview never fails with 'still normalizing' or 404.
     """
     shop_data = shop_sessions.get(shop_id, {})
     session = shop_data.get(session_id)
@@ -295,13 +291,10 @@ async def get_document_preview(
     if not target_doc:
         raise HTTPException(status_code=404, detail="Document not found")
 
-    # 1. Check if normalized path exists
     norm_path = target_doc.normalized_path
     if norm_path and os.path.exists(norm_path):
         return FileResponse(norm_path, media_type="application/pdf")
 
-    # 2. Check if original source path exists
-    # If DocumentMetadata has a file_path attribute or we can check session norm dir
     fname = target_doc.original_filename or "document.pdf"
     fallback_pdf = os.path.join(tempfile.gettempdir(), f"preview_fallback_{doc_id}.pdf")
 
@@ -328,6 +321,44 @@ async def get_document_preview(
         with open(fallback_pdf, "wb") as f:
             f.write(raw_pdf)
         return FileResponse(fallback_pdf, media_type="application/pdf")
+
+@app.get(f"{settings.API_V1_STR}/sessions/{{session_id}}/documents/{{doc_id}}/source")
+async def download_source_document(
+    session_id: str,
+    doc_id: str,
+    shop_id: str = Query("default")
+):
+    """
+    Downloads the original, un-normalized source document (e.g. .docx, .xlsx, .jpg, .pdf)
+    so the operator can edit it in Word/Excel/Photoshop before printing.
+    """
+    shop_data = shop_sessions.get(shop_id, {})
+    session = shop_data.get(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    target_doc = None
+    for d in session.documents:
+        if d.id == doc_id:
+            target_doc = d
+            break
+
+    if not target_doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    file_path = getattr(target_doc, "source_path", None)
+    if not file_path or not os.path.exists(file_path):
+        file_path = target_doc.normalized_path
+
+    if not file_path or not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="Source file unavailable on disk")
+
+    filename = target_doc.original_filename or os.path.basename(file_path)
+    return FileResponse(
+        file_path,
+        filename=filename,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+    )
 
 @app.get(f"{settings.API_V1_STR}/sessions/{{session_id}}/download")
 async def download_master_pdf(session_id: str, shop_id: str = "default"):

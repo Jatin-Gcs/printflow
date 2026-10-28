@@ -4,7 +4,7 @@ import {
   FileText,
   FileCheck2,
   Presentation,
-  Sheet,
+  FileSpreadsheet,
   Image as ImageIcon,
   Lock,
   Clock,
@@ -88,7 +88,7 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
   const [searchQuery, setSearchQuery] = useState('');
   const [activeTab, setActiveTab] = useState<'ACTIVE' | 'COMPLETED'>('ACTIVE');
 
-  // Global batch-level duplex toggle: 'SIMPLEX' (Single-Sided) or 'DUPLEX' (Double-Sided)
+  // Single global batch-level duplex toggle
   const [batchPrintMode, setBatchPrintMode] = useState<'SIMPLEX' | 'DUPLEX'>('SIMPLEX');
 
   // Pricing State
@@ -271,6 +271,7 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
     ? sessions[selectedSessionId]
     : displayedList[0] || null;
 
+  // Direct Raw/Source Document Download Action
   const handleDownloadSourceDoc = (docId: string) => {
     if (!activeSession) return;
     const url = `${API_BASE}/api/v1/sessions/${activeSession.session_id}/documents/${docId}/source?shop_id=${shopId}`;
@@ -429,7 +430,7 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
     }
   }, [activeSession, batchPrintMode, pricing]);
 
-  // Distinct Icon Badge Renderer per file type
+  // Distinct Icon Badge Renderer for Supported Document Types
   const renderDocumentBadge = (filename: string, pageCount: number) => {
     const ext = filename.split('.').pop()?.toLowerCase() || '';
     const hasCount = pageCount > 0;
@@ -461,7 +462,7 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
             ? 'bg-emerald-950/40 border-emerald-800/60 text-emerald-400' 
             : 'bg-emerald-50 border-emerald-200 text-emerald-600'
         }`}>
-          <Sheet className="w-5 h-5 group-hover:scale-110 transition" />
+          <FileSpreadsheet className="w-5 h-5 group-hover:scale-110 transition" />
           <span className="text-[9px] font-mono font-bold mt-1 tracking-tight">{countLabel}</span>
           <span className="text-[8px] font-mono font-black uppercase opacity-75">XLS</span>
           <div className="absolute inset-0 bg-emerald-600/80 text-white rounded-xl flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
@@ -828,7 +829,7 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
         <main className="flex-1 flex flex-col overflow-hidden relative">
           {activeSession ? (
             <>
-              {/* Header Bar with Prominent Batch-Level Toggle */}
+              {/* Header Bar with Batch-Level Duplex Toggle */}
               <div className={`p-4 border-b flex items-center justify-between shrink-0 transition-colors ${
                 isDark ? 'bg-[#0C1222]/70 border-slate-800/80' : 'bg-white border-slate-200'
               }`}>
@@ -946,7 +947,7 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
                         </div>
                       </div>
 
-                      {/* Right Row Actions: Direct Source Download & View Button */}
+                      {/* Right Row Actions: Direct Source Download & Inspect */}
                       <div className="flex items-center gap-2">
                         <button
                           onClick={() => handleDownloadSourceDoc(doc.id)}

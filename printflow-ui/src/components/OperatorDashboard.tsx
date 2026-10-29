@@ -26,6 +26,7 @@ import {
   ShieldCheck,
   ExternalLink,
   Download,
+  FolderArchive,
   AlertTriangle
 } from 'lucide-react';
 
@@ -91,7 +92,7 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
   // Single global batch-level duplex toggle: 'SIMPLEX' or 'DUPLEX'
   const [batchPrintMode, setBatchPrintMode] = useState<'SIMPLEX' | 'DUPLEX'>('SIMPLEX');
 
-  // Rate card pricing state
+  // Pricing State
   const [pricing, setPricing] = useState<PricingConfig>({ rate_simplex: 2.0, rate_duplex: 3.0 });
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isProfileOpen, setIsProfileOpen] = useState(false);
@@ -271,9 +272,21 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
     ? sessions[selectedSessionId]
     : displayedList[0] || null;
 
+  // Single document source download
   const handleDownloadSourceDoc = (docId: string) => {
     if (!activeSession) return;
     const url = `${API_BASE}/api/v1/sessions/${activeSession.session_id}/documents/${docId}/source?shop_id=${shopId}`;
+    const link = document.createElement('a');
+    link.href = url;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  // Download All Sources as a single .ZIP archive
+  const handleDownloadAllZip = () => {
+    if (!activeSession) return;
+    const url = `${API_BASE}/api/v1/sessions/${activeSession.session_id}/download-zip?shop_id=${shopId}`;
     const link = document.createElement('a');
     link.href = url;
     document.body.appendChild(link);
@@ -418,10 +431,8 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
       if (!d.is_corrupted) {
         totalPages += d.page_count;
         if (batchPrintMode === 'SIMPLEX') {
-          // Single-sided: 1 page = 1 physical sheet
           physicalSheets += d.page_count;
         } else {
-          // Duplex isolation: Each document occupies isolated physical sheets: ceil(pages / 2)
           physicalSheets += Math.ceil(d.page_count / 2);
         }
       }
@@ -585,7 +596,7 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
           </div>
         </div>
 
-        {/* US-5.2: Omnibar Search with High-Contrast Input Container & Darkened Placeholder */}
+        {/* US-5.2: Omnibar Search with High-Contrast Input Container */}
         <div className="relative w-96">
           <Search className={`w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 ${
             isDark ? 'text-slate-400' : 'text-slate-500'
@@ -832,7 +843,7 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
         <main className="flex-1 flex flex-col overflow-hidden relative">
           {activeSession ? (
             <>
-              {/* Header Bar with US-5.3: Dedicated Segmented Batch Mode Switcher Pill */}
+              {/* Header Bar with Batch-Level Duplex Switcher and Action Buttons */}
               <div className={`p-4 border-b flex items-center justify-between shrink-0 transition-colors ${
                 isDark ? 'bg-[#0C1222]/70 border-slate-800/80' : 'bg-white border-slate-200'
               }`}>
@@ -857,7 +868,7 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
                 </div>
 
                 <div className="flex items-center gap-3">
-                  {/* US-5.3: Dedicated Compact Segmented Container Pill */}
+                  {/* Batch Duplex Switcher */}
                   <div className={`p-1 rounded-xl border flex items-center gap-1 shadow-inner ${
                     isDark ? 'bg-slate-800/90 border-slate-700' : 'bg-slate-100 border-slate-200'
                   }`}>
@@ -888,6 +899,20 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
                       <span>Double-Sided Batch</span>
                     </button>
                   </div>
+
+                  {/* Download All (.zip) Button */}
+                  <button
+                    onClick={handleDownloadAllZip}
+                    className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl border text-xs font-bold transition shadow-xs ${
+                      isDark
+                        ? 'border-slate-700 bg-slate-800 hover:bg-slate-700 text-slate-200'
+                        : 'border-slate-300 bg-white hover:bg-slate-100 text-slate-700'
+                    }`}
+                    title="Download all original customer files in a single .ZIP archive"
+                  >
+                    <FolderArchive className="w-4 h-4 text-amber-500" />
+                    <span>Download All (.zip)</span>
+                  </button>
 
                   {/* Dedicated Handover Action */}
                   {activeSession.status !== 'COMPLETED' && (
@@ -983,7 +1008,7 @@ export const OperatorDashboard: React.FC<OperatorDashboardProps> = ({ shopId = '
                 })}
               </div>
 
-              {/* Bottom Production Dock (Synchronized with US-5.1 Math) */}
+              {/* Bottom Production Dock */}
               <div className={`absolute bottom-0 left-0 right-0 p-5 border-t flex items-center justify-between z-20 transition-colors backdrop-blur-xl ${
                 isDark ? 'bg-[#0B101D]/95 border-slate-800/90' : 'bg-white/95 border-slate-200 shadow-2xl'
               }`}>

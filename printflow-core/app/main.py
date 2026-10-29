@@ -4,6 +4,7 @@ import os
 import tempfile
 import time
 import uuid
+import zipfile
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
@@ -12,7 +13,7 @@ from typing import Dict, List, Any
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, BackgroundTasks, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response, FileResponse
+from fastapi.responses import Response, FileResponse, StreamingResponse
 from pydantic import BaseModel
 import pymupdf
 import requests
@@ -358,6 +359,53 @@ async def download_source_document(
         file_path,
         filename=filename,
         headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+    )
+
+@app.get(f"{settings.API_V1_STR}/sessions/{{session_id}}/download-zip")
+async def download_session_zip(session_id: str, shop_id: str = "default"):
+    """
+    Bundles all original source documents for a customer session into a single .zip file.
+    Streams directly from memory without writing temporary zip archives to disk.
+    """
+    shop_data = shop_sessions.get(shop_id, {})
+    session = shop_data.get(session_id)
+    if not session or not session.documents:
+        raise HTTPException(status_code=404, detail="Session or documents not found")
+
+    zip_buffer = io.BytesIO()
+    used_names = set()
+
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        for doc in session.documents:
+            file_path = getattr(doc, "source_path", None)
+            if not file_path or not os.path.exists(file_path):
+                file_path = doc.normalized_path
+
+            if file_path and os.path.exists(file_path):
+                base_name = doc.original_filename or os.path.basename(file_path)
+                arcname = base_name
+
+                # Prevent filename collisions inside the zip
+                count = 1
+                stem, ext = os.path.splitext(base_name)
+                while arcname in used_names:
+                    arcname = f"{stem}_{count}{ext}"
+                    count += 1
+                used_names.add(arcname)
+
+                zf.write(file_path, arcname=arcname)
+
+    zip_buffer.seek(0)
+    clean_phone = "".join(filter(str.isalnum, session.customer_phone)) or session_id[:8]
+    zip_filename = f"PrintFlow_{clean_phone}_Sources.zip"
+
+    return StreamingResponse(
+        zip_buffer,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{zip_filename}"',
+            "Access-Control-Expose-Headers": "Content-Disposition"
+        }
     )
 
 @app.get(f"{settings.API_V1_STR}/sessions/{{session_id}}/download")

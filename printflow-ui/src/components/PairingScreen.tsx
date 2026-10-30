@@ -9,7 +9,8 @@ import {
   Settings, 
   QrCode,
   Sun,
-  Moon
+  Moon,
+  RotateCcw
 } from 'lucide-react';
 
 interface PairingScreenProps {
@@ -57,12 +58,12 @@ export const PairingScreen: React.FC<PairingScreenProps> = ({ shopId, onPaired }
       currentQrRef.current = newQr;
       setQrImage(newQr);
       setTimeLeft(20);
+      setIsRefreshing(false);
       setLoadingStallCount(0);
     }
   };
 
-  const fetchStatus = async (isManual = false) => {
-    if (isManual) setIsRefreshing(true);
+  const fetchStatus = async () => {
     try {
       const res = await fetch(`${API_BASE}/api/v1/gateway/status?shop_id=${shopId}`);
       if (!res.ok) throw new Error('Status fetch failed');
@@ -77,40 +78,49 @@ export const PairingScreen: React.FC<PairingScreenProps> = ({ shopId, onPaired }
       if (data.qr_image) {
         applyNewQr(data.qr_image);
       } else {
-        // Track stalled loading states and force re-init if needed
         setLoadingStallCount((c) => c + 1);
       }
     } catch (err) {
       console.warn('[PAIRING] Fetch notice:', err);
-    } finally {
-      if (isManual) setIsRefreshing(false);
     }
   };
 
-  // If loading exceeds 12 seconds (3 consecutive misses), force backend re-init
+  const handleForceReset = async () => {
+    setIsRefreshing(true);
+    setQrImage(null);
+    currentQrRef.current = null;
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/gateway/reset?shop_id=${shopId}`, {
+        method: 'POST'
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.qr_image) {
+          applyNewQr(data.qr_image);
+        }
+      }
+    } catch (err) {
+      console.warn('[PAIRING] Reset notice:', err);
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
+
+  // Auto-recover if stalled without a QR for 9 seconds (3 polling cycles)
   useEffect(() => {
     if (loadingStallCount >= 3 && !qrImage && gatewayStatus !== 'CONNECTED') {
-      console.log('[PAIRING] Detected stalled QR generation. Forcing sidecar reset...');
+      console.log('[PAIRING] Detected stalled QR generation. Auto-triggering reset...');
       setLoadingStallCount(0);
-      fetch(`${API_BASE}/api/v1/gateway/status?shop_id=${shopId}`)
-        .then(() => fetchStatus(false))
-        .catch(() => {});
+      handleForceReset();
     }
-  }, [loadingStallCount, qrImage, gatewayStatus, API_BASE, shopId]);
-
-  const handleManualRefresh = () => {
-    currentQrRef.current = null;
-    setQrImage(null);
-    setGatewayStatus('CONNECTING');
-    fetchStatus(true);
-  };
+  }, [loadingStallCount, qrImage, gatewayStatus]);
 
   useEffect(() => {
     fetchStatus();
 
     pollIntervalRef.current = setInterval(() => {
-      fetchStatus(false);
-    }, 4000);
+      fetchStatus();
+    }, 3000);
 
     const wsUrl = `${WS_BASE}/ws/operator?shop_id=${shopId}`;
     const ws = new WebSocket(wsUrl);
@@ -253,7 +263,7 @@ export const PairingScreen: React.FC<PairingScreenProps> = ({ shopId, onPaired }
                       <RefreshCw className="w-7 h-7 text-white mb-2 animate-spin" />
                       <p className="text-xs font-bold text-white mb-2">QR Expired</p>
                       <button
-                        onClick={handleManualRefresh}
+                        onClick={handleForceReset}
                         disabled={isRefreshing}
                         className="px-3.5 py-1.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold rounded-lg shadow-md transition active:scale-95"
                       >
@@ -263,14 +273,20 @@ export const PairingScreen: React.FC<PairingScreenProps> = ({ shopId, onPaired }
                   )}
                 </div>
               ) : (
-                <div className="w-64 h-64 flex flex-col items-center justify-center space-y-3 text-slate-700">
-                  <RefreshCw className="w-8 h-8 animate-spin text-indigo-600" />
-                  <span className="text-[11px] font-mono font-medium">Generating dedicated QR...</span>
+                <div className="w-64 h-64 flex flex-col items-center justify-center p-4 text-center space-y-3">
+                  <RefreshCw className={`w-8 h-8 text-indigo-600 ${isRefreshing ? 'animate-spin' : 'animate-spin'}`} />
+                  <span className="text-xs font-mono font-medium text-slate-600 dark:text-slate-300">
+                    {isRefreshing ? 'Regenerating QR Code...' : 'Generating dedicated QR...'}
+                  </span>
+                  
+                  {/* Clickable Reset Action Button */}
                   <button
-                    onClick={handleManualRefresh}
-                    className="mt-2 text-[10px] text-indigo-600 hover:underline font-mono"
+                    onClick={handleForceReset}
+                    disabled={isRefreshing}
+                    className="mt-3 flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-50 hover:bg-indigo-100 dark:bg-slate-800 dark:hover:bg-slate-750 text-indigo-600 dark:text-indigo-400 text-xs font-semibold border border-indigo-200 dark:border-slate-700 transition active:scale-95 cursor-pointer"
                   >
-                    Taking too long? Click to reset
+                    <RotateCcw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
+                    <span>Reset & Force New QR</span>
                   </button>
                 </div>
               )}

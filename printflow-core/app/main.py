@@ -163,15 +163,19 @@ async def operator_websocket(websocket: WebSocket, shop_id: str = Query("default
 
 @app.get(f"{settings.API_V1_STR}/gateway/status")
 async def get_gateway_status(shop_id: str = "default"):
+    """
+    Returns the live QR code or connection status.
+    If no QR is in memory, it commands the Node sidecar to initialize the socket and waits up to 2 seconds.
+    """
     current_state = gateway_states.get(shop_id)
-    if current_state and current_state.get("qr_image"):
+    if current_state and (current_state.get("qr_image") or current_state.get("status") == "CONNECTED"):
         return current_state
 
     try:
         res = requests.post(
             f"{GATEWAY_SIDECAR_URL}/api/gateway/init", 
-            json={"shop_id": shop_id}, 
-            timeout=3
+            json={"shop_id": shop_id, "force": False}, 
+            timeout=5
         )
         if res.ok:
             data = res.json()
@@ -185,7 +189,41 @@ async def get_gateway_status(shop_id: str = "default"):
     except Exception as e:
         print(f"[GATEWAY] Init request to sidecar notice: {e}")
 
-    return gateway_states.get(shop_id, {"status": "DISCONNECTED", "qr_image": None})
+    # Active wait for Baileys to emit QR to FastAPI endpoint
+    for _ in range(4):
+        await asyncio.sleep(0.5)
+        st = gateway_states.get(shop_id)
+        if st and st.get("qr_image"):
+            return st
+
+    return gateway_states.get(shop_id, {"status": "SCAN_REQUIRED", "qr_image": None})
+
+@app.post(f"{settings.API_V1_STR}/gateway/reset")
+async def reset_gateway(shop_id: str = Query("default")):
+    """Forcefully destroys any stuck Baileys socket for this shop and regenerates a fresh QR."""
+    gateway_states[shop_id] = {
+        "status": "SCAN_REQUIRED",
+        "qr_image": None,
+        "updated_at": time.time()
+    }
+    try:
+        requests.post(
+            f"{GATEWAY_SIDECAR_URL}/api/gateway/init",
+            json={"shop_id": shop_id, "force": True},
+            timeout=6
+        )
+    except Exception as e:
+        print(f"[GATEWAY] Reset error: {e}")
+
+    # Wait up to 3 seconds for fresh QR emission
+    for _ in range(6):
+        await asyncio.sleep(0.5)
+        st = gateway_states.get(shop_id)
+        if st and st.get("qr_image"):
+            await ws_manager.broadcast_event(f"GATEWAY_STATUS_UPDATED:{shop_id}", st)
+            return st
+
+    return {"status": "SCAN_REQUIRED", "shop_id": shop_id, "qr_image": None}
 
 @app.post(f"{settings.API_V1_STR}/gateway/qr-state")
 async def update_gateway_qr_state(payload: Dict[str, Any]):
@@ -275,9 +313,7 @@ async def get_document_preview(
     doc_id: str,
     shop_id: str = Query("default")
 ):
-    """
-    Returns the viewable PDF or media stream for an individual document.
-    """
+    """Returns the viewable PDF or media stream for an individual document."""
     shop_data = shop_sessions.get(shop_id, {})
     session = shop_data.get(session_id)
     if not session:
@@ -301,7 +337,7 @@ async def get_document_preview(
 
     try:
         doc = pymupdf.open()
-        page = doc.new_page(width=595.276, height=841.89)  # Standard A4
+        page = doc.new_page(width=595.276, height=841.89)
         page.insert_text(
             (72, 100),
             f"PrintFlow Document Preview\n\nFile: {fname}\nPages: {target_doc.page_count}\nStatus: Normalized & Ready to Print",
@@ -329,10 +365,7 @@ async def download_source_document(
     doc_id: str,
     shop_id: str = Query("default")
 ):
-    """
-    Downloads the original, un-normalized source document (e.g. .docx, .xlsx, .jpg, .pdf)
-    so the operator can edit it in Word/Excel/Photoshop before printing.
-    """
+    """Downloads the original, un-normalized source document."""
     shop_data = shop_sessions.get(shop_id, {})
     session = shop_data.get(session_id)
     if not session:
@@ -363,10 +396,7 @@ async def download_source_document(
 
 @app.get(f"{settings.API_V1_STR}/sessions/{{session_id}}/download-zip")
 async def download_session_zip(session_id: str, shop_id: str = "default"):
-    """
-    Bundles all original source documents for a customer session into a single .zip file.
-    Streams directly from memory without writing temporary zip archives to disk.
-    """
+    """Bundles all original source documents for a customer session into a single .zip file."""
     shop_data = shop_sessions.get(shop_id, {})
     session = shop_data.get(session_id)
     if not session or not session.documents:
@@ -385,7 +415,6 @@ async def download_session_zip(session_id: str, shop_id: str = "default"):
                 base_name = doc.original_filename or os.path.basename(file_path)
                 arcname = base_name
 
-                # Prevent filename collisions inside the zip
                 count = 1
                 stem, ext = os.path.splitext(base_name)
                 while arcname in used_names:

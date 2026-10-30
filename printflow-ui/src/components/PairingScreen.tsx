@@ -29,7 +29,6 @@ export const PairingScreen: React.FC<PairingScreenProps> = ({ shopId, onPaired }
 
   const WS_BASE = useMemo(() => API_BASE.replace(/^http/, 'ws'), [API_BASE]);
 
-  // Inherit or toggle theme directly on the Pairing Station
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
     const saved = localStorage.getItem('printflow_theme');
     if (saved === 'dark' || saved === 'light') return saved;
@@ -48,6 +47,7 @@ export const PairingScreen: React.FC<PairingScreenProps> = ({ shopId, onPaired }
   const [qrImage, setQrImage] = useState<string | null>(null);
   const [timeLeft, setTimeLeft] = useState<number>(20);
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
+  const [loadingStallCount, setLoadingStallCount] = useState<number>(0);
 
   const currentQrRef = useRef<string | null>(null);
   const pollIntervalRef = useRef<any>(null);
@@ -57,6 +57,7 @@ export const PairingScreen: React.FC<PairingScreenProps> = ({ shopId, onPaired }
       currentQrRef.current = newQr;
       setQrImage(newQr);
       setTimeLeft(20);
+      setLoadingStallCount(0);
     }
   };
 
@@ -75,6 +76,9 @@ export const PairingScreen: React.FC<PairingScreenProps> = ({ shopId, onPaired }
 
       if (data.qr_image) {
         applyNewQr(data.qr_image);
+      } else {
+        // Track stalled loading states and force re-init if needed
+        setLoadingStallCount((c) => c + 1);
       }
     } catch (err) {
       console.warn('[PAIRING] Fetch notice:', err);
@@ -83,8 +87,21 @@ export const PairingScreen: React.FC<PairingScreenProps> = ({ shopId, onPaired }
     }
   };
 
+  // If loading exceeds 12 seconds (3 consecutive misses), force backend re-init
+  useEffect(() => {
+    if (loadingStallCount >= 3 && !qrImage && gatewayStatus !== 'CONNECTED') {
+      console.log('[PAIRING] Detected stalled QR generation. Forcing sidecar reset...');
+      setLoadingStallCount(0);
+      fetch(`${API_BASE}/api/v1/gateway/status?shop_id=${shopId}`)
+        .then(() => fetchStatus(false))
+        .catch(() => {});
+    }
+  }, [loadingStallCount, qrImage, gatewayStatus, API_BASE, shopId]);
+
   const handleManualRefresh = () => {
     currentQrRef.current = null;
+    setQrImage(null);
+    setGatewayStatus('CONNECTING');
     fetchStatus(true);
   };
 
@@ -182,7 +199,7 @@ export const PairingScreen: React.FC<PairingScreenProps> = ({ shopId, onPaired }
         </button>
       </div>
 
-      {/* Main Container Card: Adaptive Light / Dark Tokens */}
+      {/* Main Container Card */}
       <div className={`max-w-md w-full rounded-3xl p-8 shadow-2xl flex flex-col items-center relative z-10 backdrop-blur-xl border transition-colors ${
         isDark ? 'bg-[#0D1322] border-slate-800/80 shadow-black/80' : 'bg-white border-slate-200 shadow-slate-200/80'
       }`}>
@@ -249,6 +266,12 @@ export const PairingScreen: React.FC<PairingScreenProps> = ({ shopId, onPaired }
                 <div className="w-64 h-64 flex flex-col items-center justify-center space-y-3 text-slate-700">
                   <RefreshCw className="w-8 h-8 animate-spin text-indigo-600" />
                   <span className="text-[11px] font-mono font-medium">Generating dedicated QR...</span>
+                  <button
+                    onClick={handleManualRefresh}
+                    className="mt-2 text-[10px] text-indigo-600 hover:underline font-mono"
+                  >
+                    Taking too long? Click to reset
+                  </button>
                 </div>
               )}
 

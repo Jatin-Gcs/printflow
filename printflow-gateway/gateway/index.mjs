@@ -99,10 +99,23 @@ function unwrapMediaMessage(rawMessage) {
   return { type: null, media: null, rootMsg: null };
 }
 
+function wipeAuthDirectory(shopId) {
+  const shopAuthFolder = path.join(AUTH_BASE_DIR, shopId);
+  if (fs.existsSync(shopAuthFolder)) {
+    try {
+      fs.rmSync(shopAuthFolder, { recursive: true, force: true });
+      console.log(`[GATEWAY:${shopId}] Cleared disk credentials: ${shopAuthFolder}`);
+    } catch (e) {
+      console.warn(`[GATEWAY:${shopId}] Notice removing auth folder:`, e.message);
+    }
+  }
+}
+
 async function destroySocket(shopId) {
   const sock = activeSockets.get(shopId);
   activeSockets.delete(shopId);
   socketInitLocks.delete(shopId);
+  latestQrPerShop.delete(shopId);
 
   if (sock) {
     try {
@@ -111,7 +124,7 @@ async function destroySocket(shopId) {
       sock.ev.removeAllListeners('messages.upsert');
       sock.end(undefined);
     } catch (e) {
-      console.warn(`[GATEWAY:${shopId}] Graceful teardown warning:`, e.message);
+      console.warn(`[GATEWAY:${shopId}] Teardown notice:`, e.message);
     }
   }
 }
@@ -119,6 +132,8 @@ async function destroySocket(shopId) {
 async function getOrInitSocket(shopId = 'default', forceReinit = false) {
   if (forceReinit) {
     await destroySocket(shopId);
+    wipeAuthDirectory(shopId);
+    await new Promise((r) => setTimeout(r, 200));
   }
 
   if (activeSockets.has(shopId)) {
@@ -143,7 +158,7 @@ async function getOrInitSocket(shopId = 'default', forceReinit = false) {
         printQRInTerminal: false,
         syncFullHistory: false,
         logger: pino({ level: 'fatal' }),
-        browser: ['PrintFlow Counter', 'Chrome', '120.0.0'],
+        browser: ['PrintFlow Counter', 'Chrome', '122.0.0'],
         keepAliveIntervalMs: 20000,
         defaultQueryTimeoutMs: 60000,
         connectTimeoutMs: 60000,
@@ -170,7 +185,7 @@ async function getOrInitSocket(shopId = 'default', forceReinit = false) {
               status: 'SCAN_REQUIRED',
               qr_image: qrDataUrl
             });
-            console.log(`[GATEWAY:${shopId}] Dispatched pairing QR code.`);
+            console.log(`[GATEWAY:${shopId}] Fresh pairing QR emitted.`);
           } catch (err) {
             console.error(`[GATEWAY:${shopId}] Failed to relay QR data:`, err.message);
           }
@@ -189,11 +204,14 @@ async function getOrInitSocket(shopId = 'default', forceReinit = false) {
             qr_image: null
           }).catch(() => {});
 
-          if (!isExplicitLogout) {
-            console.log(`[GATEWAY:${shopId}] Socket disconnected. Generating fresh QR in 2s...`);
-            setTimeout(() => getOrInitSocket(shopId, true), 2000);
+          if (isExplicitLogout) {
+            console.log(`[GATEWAY:${shopId}] Device logged out (401). Wiping stale credentials...`);
+            wipeAuthDirectory(shopId);
+            // Immediately start a clean socket to generate a new QR code
+            setTimeout(() => getOrInitSocket(shopId, true), 500);
           } else {
-            console.log(`[GATEWAY:${shopId}] Session closed after explicit logout.`);
+            console.log(`[GATEWAY:${shopId}] Connection dropped. Re-initializing in 2s...`);
+            setTimeout(() => getOrInitSocket(shopId, false), 2000);
           }
         } else if (connection === 'open') {
           console.log(`[GATEWAY:${shopId}] Connected to WhatsApp Web.`);
@@ -213,7 +231,6 @@ async function getOrInitSocket(shopId = 'default', forceReinit = false) {
           if (!msg.message || msg.key?.fromMe) continue;
 
           const senderJid = msg.key?.remoteJid || '';
-
           if (senderJid === 'status@broadcast' || senderJid.includes('broadcast') || senderJid.endsWith('@g.us')) {
             continue;
           }
@@ -236,10 +253,7 @@ async function getOrInitSocket(shopId = 'default', forceReinit = false) {
           const isAllowedMime = ALLOWED_MIME_TYPES.has(detectedMime);
           const isAllowedExt = ALLOWED_EXTENSIONS.has(fileExt);
 
-          if (!isAllowedMime && !isAllowedExt) {
-            console.log(`[GATEWAY:${shopId}] Ignored unsupported file format: mime=${detectedMime}, ext=${fileExt}`);
-            continue;
-          }
+          if (!isAllowedMime && !isAllowedExt) continue;
 
           const customerPhone = extractPhoneNumber(msg);
 
@@ -321,40 +335,21 @@ server.post('/api/gateway/init', async (req, res) => {
 
 server.post('/api/gateway/logout', async (req, res) => {
   const shopId = req.body.shop_id || 'default';
-  console.log(`[GATEWAY:${shopId}] Starting clean logout sequence...`);
+  console.log(`[GATEWAY:${shopId}] Explicit logout sequence started...`);
 
-  latestQrPerShop.delete(shopId);
-
-  // 1. Destroy socket and detach listeners
   await destroySocket(shopId);
+  wipeAuthDirectory(shopId);
 
-  // 2. Wait 300ms for file handles to close cleanly
-  await new Promise((r) => setTimeout(r, 300));
-
-  // 3. Remove disk credentials safely
-  const shopAuthFolder = path.join(AUTH_BASE_DIR, shopId);
-  if (fs.existsSync(shopAuthFolder)) {
-    try {
-      fs.rmSync(shopAuthFolder, { recursive: true, force: true });
-      console.log(`[GATEWAY:${shopId}] Credential store cleared: ${shopAuthFolder}`);
-    } catch (err) {
-      console.error(`[GATEWAY:${shopId}] File unlock error on removal:`, err.message);
-    }
-  }
-
-  // 4. Notify FastAPI of clean logout
   await axios.post(FASTAPI_QR_ENDPOINT, {
     shop_id: shopId,
     status: 'LOGGED_OUT',
     qr_image: null
   }).catch(() => {});
 
-  // 5. Spin up a fresh socket with a clean directory to produce a fresh QR code
+  // Generate fresh QR immediately
   setTimeout(() => {
-    getOrInitSocket(shopId, true).catch((e) =>
-      console.error(`[GATEWAY:${shopId}] Post-logout re-init error:`, e.message)
-    );
-  }, 500);
+    getOrInitSocket(shopId, true).catch(() => {});
+  }, 400);
 
   return res.json({ status: 'LOGGED_OUT', shop_id: shopId });
 });

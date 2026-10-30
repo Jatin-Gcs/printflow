@@ -48,7 +48,7 @@ export const PairingScreen: React.FC<PairingScreenProps> = ({ shopId, onPaired }
   const [qrImage, setQrImage] = useState<string | null>(null);
   const [timeLeft, setTimeLeft] = useState<number>(20);
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
-  const [loadingStallCount, setLoadingStallCount] = useState<number>(0);
+  const [stallCounter, setStallCounter] = useState<number>(0);
 
   const currentQrRef = useRef<string | null>(null);
   const pollIntervalRef = useRef<any>(null);
@@ -59,7 +59,7 @@ export const PairingScreen: React.FC<PairingScreenProps> = ({ shopId, onPaired }
       setQrImage(newQr);
       setTimeLeft(20);
       setIsRefreshing(false);
-      setLoadingStallCount(0);
+      setStallCounter(0);
     }
   };
 
@@ -78,7 +78,7 @@ export const PairingScreen: React.FC<PairingScreenProps> = ({ shopId, onPaired }
       if (data.qr_image) {
         applyNewQr(data.qr_image);
       } else {
-        setLoadingStallCount((c) => c + 1);
+        setStallCounter((c) => c + 1);
       }
     } catch (err) {
       console.warn('[PAIRING] Fetch notice:', err);
@@ -106,14 +106,14 @@ export const PairingScreen: React.FC<PairingScreenProps> = ({ shopId, onPaired }
     }
   };
 
-  // Auto-recover if stalled without a QR for 9 seconds (3 polling cycles)
+  // Auto-recover if stalled without a QR for 6 seconds (2 cycles)
   useEffect(() => {
-    if (loadingStallCount >= 3 && !qrImage && gatewayStatus !== 'CONNECTED') {
-      console.log('[PAIRING] Detected stalled QR generation. Auto-triggering reset...');
-      setLoadingStallCount(0);
+    if (stallCounter >= 2 && !qrImage && gatewayStatus !== 'CONNECTED' && !isRefreshing) {
+      console.log('[PAIRING] Auto-triggering clean socket reset...');
+      setStallCounter(0);
       handleForceReset();
     }
-  }, [loadingStallCount, qrImage, gatewayStatus]);
+  }, [stallCounter, qrImage, gatewayStatus, isRefreshing]);
 
   useEffect(() => {
     fetchStatus();
@@ -265,7 +265,7 @@ export const PairingScreen: React.FC<PairingScreenProps> = ({ shopId, onPaired }
                       <button
                         onClick={handleForceReset}
                         disabled={isRefreshing}
-                        className="px-3.5 py-1.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold rounded-lg shadow-md transition active:scale-95"
+                        className="px-4 py-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold rounded-xl shadow-md transition active:scale-95"
                       >
                         Reload Fresh QR
                       </button>
@@ -273,17 +273,17 @@ export const PairingScreen: React.FC<PairingScreenProps> = ({ shopId, onPaired }
                   )}
                 </div>
               ) : (
-                <div className="w-64 h-64 flex flex-col items-center justify-center p-4 text-center space-y-3">
-                  <RefreshCw className={`w-8 h-8 text-indigo-600 ${isRefreshing ? 'animate-spin' : 'animate-spin'}`} />
-                  <span className="text-xs font-mono font-medium text-slate-600 dark:text-slate-300">
+                <div className="w-64 h-64 flex flex-col items-center justify-center p-4 text-center space-y-4">
+                  <RefreshCw className="w-9 h-9 text-indigo-600 animate-spin" />
+                  <span className="text-xs font-mono font-semibold text-slate-700 dark:text-slate-200">
                     {isRefreshing ? 'Regenerating QR Code...' : 'Generating dedicated QR...'}
                   </span>
                   
-                  {/* Clickable Reset Action Button */}
+                  {/* High-Contrast Interactive Reset Button */}
                   <button
                     onClick={handleForceReset}
                     disabled={isRefreshing}
-                    className="mt-3 flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-50 hover:bg-indigo-100 dark:bg-slate-800 dark:hover:bg-slate-750 text-indigo-600 dark:text-indigo-400 text-xs font-semibold border border-indigo-200 dark:border-slate-700 transition active:scale-95 cursor-pointer"
+                    className="flex items-center gap-2 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold shadow-md shadow-indigo-600/25 transition active:scale-95 cursor-pointer disabled:opacity-50"
                   >
                     <RotateCcw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
                     <span>Reset & Force New QR</span>

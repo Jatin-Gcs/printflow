@@ -165,7 +165,7 @@ async def operator_websocket(websocket: WebSocket, shop_id: str = Query("default
 async def get_gateway_status(shop_id: str = "default"):
     """
     Returns the live QR code or connection status.
-    If no QR is in memory, it commands the Node sidecar to initialize the socket and waits up to 2 seconds.
+    If no QR is in memory, it commands the Node sidecar to initialize the socket and actively waits.
     """
     current_state = gateway_states.get(shop_id)
     if current_state and (current_state.get("qr_image") or current_state.get("status") == "CONNECTED"):
@@ -187,9 +187,9 @@ async def get_gateway_status(shop_id: str = "default"):
                 }
                 return gateway_states[shop_id]
     except Exception as e:
-        print(f"[GATEWAY] Init request to sidecar notice: {e}")
+        print(f"[GATEWAY] Init request notice: {e}")
 
-    # Active wait for Baileys to emit QR to FastAPI endpoint
+    # Actively wait up to 2 seconds for fresh QR emission
     for _ in range(4):
         await asyncio.sleep(0.5)
         st = gateway_states.get(shop_id)
@@ -200,7 +200,7 @@ async def get_gateway_status(shop_id: str = "default"):
 
 @app.post(f"{settings.API_V1_STR}/gateway/reset")
 async def reset_gateway(shop_id: str = Query("default")):
-    """Forcefully destroys any stuck Baileys socket for this shop and regenerates a fresh QR."""
+    """Forcefully destroys any stuck Baileys socket for this shop, clears stale files, and regenerates a fresh QR."""
     gateway_states[shop_id] = {
         "status": "SCAN_REQUIRED",
         "qr_image": None,
@@ -246,7 +246,7 @@ async def logout_gateway(shop_id: str = Query("default")):
             timeout=4
         )
     except Exception as e:
-        print(f"[GATEWAY] Logout sidecar call notice (handled gracefully): {e}")
+        print(f"[GATEWAY] Logout sidecar call notice: {e}")
 
     gateway_states[shop_id] = {
         "status": "LOGGED_OUT",
